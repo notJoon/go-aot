@@ -1,0 +1,10 @@
+name = "GoAot"
+version = "0.1.0"
+defaultTargets = ["goaot"]
+
+[[lean_exe]]
+name = "goaot"
+root = "Main"
+
+[[lean_lib]]
+name = "GoAot"

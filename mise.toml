@@ -1,0 +1,13 @@
+[tools]
+go = "1.26.2"
+
+[env]
+_.path = ["{{config_root}}/.lake/build/bin"]
+
+[tasks.build]
+description = "Lean Compiler Build"
+run = "lake build"
+
+[tasks.run]
+description = "execute goaot"
+run = "lake exe goaot"
