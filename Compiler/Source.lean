@@ -44,6 +44,12 @@ def Source.firstNewline? (source : Source) (start stop : Nat) : Option Nat :=
     if nextLineStart <= stop then some (nextLineStart - 1) else none
   | none => none
 
+/-- A zero-copy view of a valid UTF-8 source span. -/
+def Source.slice? (source : Source) (span : Span) : Option String.Slice :=
+  match source.text.pos? ⟨span.start⟩, source.text.pos? ⟨span.stop⟩ with
+  | some start, some stop => source.text.slice? start stop
+  | _, _ => none
+
 /-- Returns none for offsets past EOF. EOF itself is a valid position. -/
 def Source.position? (source : Source) (offset : Nat) : Option Position := do
   if offset > source.text.utf8ByteSize then none else do
