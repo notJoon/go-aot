@@ -1,5 +1,7 @@
 module
 
+public section
+
 namespace Parser
 
 inductive Error where
@@ -18,6 +20,7 @@ inductive Result (α : Type) (ι : Type) where
 
 end Parser
 
+@[expose]
 def Parse (ι : Type) (α : Type) : Type :=
   ι -> Parser.Result α ι
 
@@ -65,6 +68,15 @@ def orElse (p : Parse ι α) (q : Unit -> Parse ι α) : Parse ι α :=
 def attempt (p : Parse ι α) : Parse ι α := fun it =>
   match p it with
   | .ok rem res => .ok rem res
+  | .err _ e => .err it e
+
+/--
+  Inspect input without consuming it, on either success or failure.
+  Failure also rewinds its reported position; use this for prediction, not committed diagnostics.
+-/
+def lookAhead (p : Parse ι α) : Parse ι α := fun it =>
+  match p it with
+  | .ok _ a => .ok it a
   | .err _ e => .err it e
 
 instance : Alternative (Parse ι) where
