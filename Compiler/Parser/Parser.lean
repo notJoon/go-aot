@@ -70,6 +70,12 @@ def attempt (p : Parse ι α) : Parse ι α := fun it =>
   | .ok rem res => .ok rem res
   | .err _ e => .err it e
 
+/-- Replace a parser's internal error while preserving the failure position. -/
+def label (p : Parse ι α) (message : String) : Parse ι α := fun it =>
+  match p it with
+  | .ok rem res => .ok rem res
+  | .err rem _ => .err rem (.other message)
+
 /--
   Inspect input without consuming it, on either success or failure.
   Failure also rewinds its reported position; use this for prediction, not committed diagnostics.
