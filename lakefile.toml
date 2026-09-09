@@ -1,6 +1,7 @@
 name = "GoAot"
 version = "0.1.0"
 defaultTargets = ["goaot"]
+testDriver = "tests"
 
 [[lean_exe]]
 name = "goaot"
@@ -8,3 +9,11 @@ root = "Main"
 
 [[lean_lib]]
 name = "GoAot"
+
+[[lean_lib]]
+name = "Compiler"
+globs = ["Compiler.+"]
+
+[[lean_exe]]
+name = "tests"
+root = "Tests.Lexer"

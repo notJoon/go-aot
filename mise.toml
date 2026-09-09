@@ -11,3 +11,7 @@ run = "lake build"
 [tasks.run]
 description = "execute goaot"
 run = "lake exe goaot"
+
+[tasks.test]
+description = "check source positions, Go lexing, and semicolon insertion"
+run = "lake test"
