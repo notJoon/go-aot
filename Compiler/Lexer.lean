@@ -9,6 +9,7 @@ public section
 
 namespace GoAot
 
+-- TODO: Use Keyword and Symbol enums when parser coverage grows so invalid spellings are unrepresentable.
 inductive TokenKind where
   | identifier
   | intLiteral | floatLiteral | imaginaryLiteral | runeLiteral | stringLiteral
@@ -39,6 +40,7 @@ Keep raw string spans intact, including their internal newlines.
 
 This implements lexical insertion only. Omission before `)` and `}` belongs to the grammar parser.
 -/
+-- TODO: Make this private, or model source and inserted tokens separately, before exposing it as an API.
 def insertSemicolons (source : Source) (tokens : Array Token) : Except String (Array Token) := do
   let sourceSize := source.text.utf8ByteSize
   let mut result := #[]
@@ -304,11 +306,19 @@ def decimalBody : P NumBody := do
   let exp ← exponent ['e', 'E']
   return if point || exp then .float else if legacy then .legacyOctal else .int
 
+/-- The base selected by a non-decimal literal prefix. -/
+private inductive NumBase where
+  | binary | octal | hexadecimal
+
 /-- The `0x`, `0b`, or `0o` prefix of a non-decimal literal, if present. -/
-def basePrefix : P (Option Char) :=
+private def basePrefix : P (Option NumBase) :=
   optional <| attempt do
     let _ ← satisfy (· == '0')
-    satisfy fun c => "xXbBoO".any (· == c)
+    match ← any with
+    | 'x' | 'X' => return .hexadecimal
+    | 'b' | 'B' => return .binary
+    | 'o' | 'O' => return .octal
+    | _ => fail "expected base prefix"
 
 def numberBody : P NumBody := do
   -- ".5" is a float; the driver routes '.' here only when a digit follows.
@@ -317,10 +327,9 @@ def numberBody : P NumBody := do
     discard <| exponent ['e', 'E']
     return .float
   match ← basePrefix with
-  | some mark =>
-    if mark == 'x' || mark == 'X' then hexBody
-    else if mark == 'b' || mark == 'B' then radixBody isBinDigit "expected binary digit"
-    else radixBody isOctDigit "expected octal digit"
+  | some .hexadecimal => hexBody
+  | some .binary => radixBody isBinDigit "expected binary digit"
+  | some .octal => radixBody isOctDigit "expected octal digit"
   | none => decimalBody
 
 /-- Validate lexical form here; arbitrary-precision value evaluation belongs to a later pass. -/
@@ -359,8 +368,9 @@ private def EscapeKind.width : EscapeKind → Nat
   | .octal => 3
 
 @[inline]
-private def EscapeKind.accepts (kind : EscapeKind) (c : Char) : Bool :=
-  if kind matches .octal then isOctDigit c else isHexDigit c
+private def EscapeKind.accepts : EscapeKind → Char → Bool
+  | .octal, c => isOctDigit c
+  | .hexByte, c | .unicode4, c | .unicode8, c => isHexDigit c
 
 @[inline]
 private def isUnicodeScalar (value : Nat) : Bool :=

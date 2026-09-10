@@ -96,6 +96,7 @@ private def lexMain : IO Unit := do
   -- Literal classification.
   for (text, kind) in [("0", TokenKind.intLiteral), ("42", .intLiteral), ("1_000", .intLiteral),
       ("0600", .intLiteral), ("0o600", .intLiteral), ("0b_1010", .intLiteral),
+      ("0B1", .intLiteral), ("0O7", .intLiteral),
       ("0xBadFace", .intLiteral), ("0X_67_7a", .intLiteral),
       ("0.", .floatLiteral), (".25", .floatLiteral), ("72.40", .floatLiteral),
       ("1e9", .floatLiteral), ("1E-6", .floatLiteral), ("1_5.2e+3", .floatLiteral),
@@ -128,6 +129,7 @@ private def lexMain : IO Unit := do
 
   checkLexFails "0x"
   checkLexFails "0b2"
+  checkLexFails "0B2"
   match lex (Source.ofString "0o8") with
   | .error message => check (message == "1:3: expected octal digit") s!"leaked parser error: {message}"
   | .ok _ => throw (IO.userError "accepted invalid octal literal")
