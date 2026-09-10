@@ -43,7 +43,7 @@ This implements lexical insertion only. Omission before `)` and `}` belongs to t
 -- TODO: Make this private, or model source and inserted tokens separately, before exposing it as an API.
 def insertSemicolons (source : Source) (tokens : Array Token) : Except String (Array Token) := do
   let sourceSize := source.text.utf8ByteSize
-  let mut result := #[]
+  let mut result := Array.emptyWithCapacity tokens.size
   let mut stop := 0
   let mut insertSemi := false
   for token in tokens do

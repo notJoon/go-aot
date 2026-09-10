@@ -13,13 +13,27 @@ open Parser
 
 private abbrev P := Parse TokenIterator
 
-private def keyword (text : String) : P Token :=
-  Parser.label (Parser.satisfy (fun token => token.kind == TokenKind.keyword text))
-    ("expected keyword '" ++ text ++ "'")
+private def keyword (text : String) : P Token := fun it =>
+  if h : Iterator.hasNext it then
+    let token := Iterator.cur' it h
+    match token.kind with
+    | .keyword actual =>
+      if actual == text then .ok (Iterator.next' it h) token
+      else .err it (.other ("expected keyword '" ++ text ++ "'"))
+    | _ => .err it (.other ("expected keyword '" ++ text ++ "'"))
+  else
+    .err it (.other ("expected keyword '" ++ text ++ "'"))
 
-private def symbol (text : String) : P Token :=
-  Parser.label (Parser.satisfy (fun token => token.kind == TokenKind.symbol text))
-    ("expected '" ++ text ++ "'")
+private def symbol (text : String) : P Token := fun it =>
+  if h : Iterator.hasNext it then
+    let token := Iterator.cur' it h
+    match token.kind with
+    | .symbol actual =>
+      if actual == text then .ok (Iterator.next' it h) token
+      else .err it (.other ("expected '" ++ text ++ "'"))
+    | _ => .err it (.other ("expected '" ++ text ++ "'"))
+  else
+    .err it (.other ("expected '" ++ text ++ "'"))
 
 private def semicolon : P Token :=
   Parser.label (Parser.satisfy (fun token => token.kind == TokenKind.semicolon))
