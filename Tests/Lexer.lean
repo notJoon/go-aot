@@ -28,7 +28,41 @@ private def checkLex (text : String) (expected : Array (TokenKind × Nat × Nat)
 private def checkLexFails (text : String) : IO Unit :=
   check (kinds text |>.toOption |>.isNone) s!"accepted invalid source: {text}"
 
+private def operatorSpellings : List String :=
+  ["<<=", ">>=", "&^=", "...",
+   "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "&^",
+   "&&", "||", "<-", "++", "--", "==", "!=", "<=", ">=", ":=",
+   "+", "-", "*", "/", "%", "&", "|", "^", "<", ">", "=", "!",
+   "(", ")", "[", "]", "{", "}", ",", ".", ":", "~"]
+
+/-- Runtime heartbeats count small allocations, so comparing input sizes detects loop allocations. -/
+private def parserAllocations (p : Lex.P α) (text : String) : IO Nat := do
+  let input := ⟨text, text.startPos⟩
+  IO.setNumHeartbeats 0
+  match p input with
+  | .ok rest _ =>
+    unless rest.2.IsAtEnd do throw (IO.userError "allocation probe did not consume its input")
+    IO.getNumHeartbeats
+  | .err _ e => throw (IO.userError s!"allocation probe failed: {e}")
+
+private def checkConstantAllocations (label : String) (p : Lex.P α) (short long : String) : IO Unit := do
+  let shortCount ← parserAllocations p short
+  let longCount ← parserAllocations p long
+  check (longCount == shortCount) s!"{label} allocations grow with input: {shortCount} -> {longCount}"
+
 private def lexMain : IO Unit := do
+  let chars (c : Char) (n : Nat) := String.ofList (List.replicate n c)
+  let copies (s : String) (n : Nat) := String.join (List.replicate n s)
+  checkConstantAllocations "whitespace" (Lex.skipWhile Lex.isSpace) (chars ' ' 8) (chars ' ' 10000)
+  checkConstantAllocations "block comment" Lex.blockCommentBody
+    (copies "*a" 4 ++ "*/") (copies "*a" 5000 ++ "*/")
+  checkConstantAllocations "digits" (Lex.digitSeq Char.isDigit)
+    (copies "1_" 4 ++ "1") (copies "1_" 5000 ++ "1")
+  checkConstantAllocations "interpreted string" Lex.interpretedBody
+    (copies "\\u0041" 4 ++ "\"") (copies "\\u0041" 5000 ++ "\"")
+  checkConstantAllocations "raw string" Lex.rawBody
+    (chars 'a' 8 ++ "`") (chars 'a' 10000 ++ "`")
+
   -- Spans cover the literal exactly and trivia is dropped.
   checkLex "" #[]
   checkLex "\uFEFFx" #[(.identifier, 3, 4), (.semicolon, 4, 4)]
@@ -50,6 +84,14 @@ private def lexMain : IO Unit := do
     (.symbol "...", 3, 6), (.symbol ")", 6, 7), (.semicolon, 7, 7)]
   checkLex "a.b" #[(.identifier, 0, 1), (.symbol ".", 1, 2), (.identifier, 2, 3), (.semicolon, 3, 3)]
   checkLex "x<-y" #[(.identifier, 0, 1), (.symbol "<-", 1, 3), (.identifier, 3, 4), (.semicolon, 4, 4)]
+  for spelling in operatorSpellings do
+    let stop := spelling.utf8ByteSize
+    let kind := TokenKind.symbol spelling
+    let expected := if kind.insertsSemicolon then
+      #[(kind, 0, stop), (.semicolon, stop, stop)]
+    else
+      #[(kind, 0, stop)]
+    checkLex spelling expected
 
   -- Literal classification.
   for (text, kind) in [("0", TokenKind.intLiteral), ("42", .intLiteral), ("1_000", .intLiteral),
@@ -64,7 +106,7 @@ private def lexMain : IO Unit := do
       ("'\\377'", .runeLiteral), ("'\\xff'", .runeLiteral), ("'\\u12e4'", .runeLiteral),
       ("'\\U0001f600'", .runeLiteral), ("'가'", .runeLiteral),
       ("\"\"", .stringLiteral), ("\"a\\\"b\\n\"", .stringLiteral), ("``", .stringLiteral),
-      ("`a\nb`", .stringLiteral)] do
+      ("\"\\377\\xff\\u12e4\\U0001f600\"", .stringLiteral), ("`a\nb`", .stringLiteral)] do
     checkLex text #[(kind, 0, text.utf8ByteSize), (.semicolon, text.utf8ByteSize, text.utf8ByteSize)]
 
   -- Longest match stops before the next token.

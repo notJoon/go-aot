@@ -21,13 +21,20 @@ structure Source where
   text : String
   private lineStarts : Array Nat
 
-def Source.ofString (text : String) : Source := Id.run do
-  let bytes := text.toUTF8
-  let mut starts := #[0]
-  for i in [:bytes.size] do
-    if bytes[i]! == 10 then
-      starts := starts.push (i + 1)
-  return ⟨text, starts⟩
+private def newlineByte : UInt8 := '\n'.toUInt8
+
+def Source.ofString (text : String) : Source :=
+  let size := text.utf8ByteSize
+  let rec collect (offset : Nat) (starts : Array Nat) : Array Nat :=
+    if h : offset < size then
+      let next := offset + 1
+      match text.getUTF8Byte ⟨offset⟩ h == newlineByte with
+      | true => collect next (starts.push next)
+      | false => collect next starts
+    else
+      starts
+  termination_by text.utf8ByteSize - offset
+  ⟨text, collect 0 #[0]⟩
 
 private def upperBound (values : Array Nat) (target : Nat) : Nat := Id.run do
   let mut lo := 0
