@@ -53,15 +53,41 @@ private def packageClause (source : Source) : P Syntax.Ident := do
   let _ ← semicolon
   return name
 
+private def stringLiteral (source : Source) : P Syntax.Expr := do
+  let token ← Parser.label
+    (Parser.satisfy (fun token => token.kind == TokenKind.stringLiteral))
+    "expected string literal"
+  match source.slice? token.span with
+  | some text => return .stringLiteral text.copy token.span
+  | none => Parser.fail "invalid string literal span"
+
+mutual
+  private partial def expression (source : Source) : P Syntax.Expr :=
+    stringLiteral source <|> callExpression source
+
+  private partial def callExpression (source : Source) : P Syntax.Expr := do
+    let callee ← identifier source
+    let first ← symbol "("
+    let argument ← expression source
+    let last ← symbol ")"
+    return .call callee argument ⟨first.span.start, last.span.stop⟩
+end
+
+private def statement (source : Source) : P Syntax.Stmt := do
+  let value ← expression source
+  let _ ← semicolon
+  return .expr value
+
 private def functionDecl (source : Source) : P Syntax.FunctionDecl := do
   let first ← keyword "func"
   let name ← identifier source
   let _ ← symbol "("
   let _ ← symbol ")"
   let _ ← symbol "{"
+  let body ← Parser.many (statement source)
   let last ← symbol "}"
   let _ ← semicolon
-  return ⟨name, ⟨first.span.start, last.span.stop⟩⟩
+  return ⟨name, body, ⟨first.span.start, last.span.stop⟩⟩
 
 private def file (source : Source) : P Syntax.File := do
   let packageName ← packageClause source
@@ -81,7 +107,7 @@ private def parserError (source : Source) (tokens : Array Token) (rest : TokenIt
   | some position => s!"{position.line}:{position.column}: {error}"
   | none => s!"offset {offset}: {error}"
 
-/-- Parse the currently supported Go subset: a package clause and empty, parameterless functions. -/
+/-- TODO: improve this -/
 def parse (source : Source) : Except String Syntax.File := do
   let tokens ← lex source
   match GoParser.file source ⟨tokens, 0⟩ with

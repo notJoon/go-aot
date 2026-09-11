@@ -11,9 +11,18 @@ structure Ident where
   span : Span
   deriving Repr, BEq
 
-/-- The currently supported function form is `func name() {}`. -/
+inductive Expr where
+  | stringLiteral (text : String) (span : Span)
+  | call (callee : Ident) (argument : Expr) (span : Span)
+  deriving Repr, BEq
+
+inductive Stmt where
+  | expr (value : Expr)
+  deriving Repr, BEq
+
 structure FunctionDecl where
   name : Ident
+  body : Array Stmt
   span : Span
   deriving Repr, BEq
 

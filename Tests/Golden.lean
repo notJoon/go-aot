@@ -26,7 +26,24 @@ private def checkGolden (name : String) : IO Unit := do
   let actual := renderParse input
   check (actual == expected) s!"golden mismatch: {name}\nexpected:\n{expected}actual:\n{actual}"
 
+private def checkCompileGolden (name : String) : IO Unit := do
+  let path := "Tests/Golden/" ++ name
+  let input ← IO.FS.readFile (path ++ ".go")
+  let expected ← IO.FS.readFile (path ++ ".c.golden")
+  match compileToC (Source.ofString input) with
+  | .ok actual =>
+    check (actual == expected) s!"compile golden mismatch: {name}\n{actual}"
+    IO.FS.withTempDir fun dir => do
+      let cPath := dir / "program.c"
+      let exePath := dir / "program"
+      IO.FS.writeFile cPath actual
+      discard <| IO.Process.run { cmd := "cc", args := #[cPath.toString, "-o", exePath.toString] }
+      let output ← IO.Process.run { cmd := exePath.toString }
+      check (output == "Hello, world!\n") s!"wrong native output: {repr output}"
+  | .error message => throw (IO.userError s!"compile failed: {name}: {message}")
+
 def main : IO Unit := do
   checkGolden "minimal"
   checkGolden "invalid"
-  IO.println "Go parser golden tests: OK"
+  checkCompileGolden "hello"
+  IO.println "Go parser and AOT tests: OK"
