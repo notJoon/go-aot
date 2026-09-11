@@ -1,0 +1,514 @@
+// Go language specification grammar (EBNF)
+// Source: https://go.dev/ref/spec  (fetched 2026-09-11)
+
+
+// ===== Notation =====
+
+Syntax      = { Production } .
+Production  = production_name "=" [ Expression ] "." .
+Expression  = Term { "|" Term } .
+Term        = Factor { Factor } .
+Factor      = production_name | token [ "…" token ] | Group | Option | Repetition .
+Group       = "(" Expression ")" .
+Option      = "[" Expression "]" .
+Repetition  = "{" Expression "}" .
+
+
+// ===== Characters =====
+
+newline        = /* the Unicode code point U+000A */ .
+unicode_char   = /* an arbitrary Unicode code point except newline */ .
+unicode_letter = /* a Unicode code point categorized as "Letter" */ .
+unicode_digit  = /* a Unicode code point categorized as "Number, decimal digit" */ .
+
+
+// ===== Letters and digits =====
+
+letter        = unicode_letter | "_" .
+decimal_digit = "0" … "9" .
+binary_digit  = "0" | "1" .
+octal_digit   = "0" … "7" .
+hex_digit     = "0" … "9" | "A" … "F" | "a" … "f" .
+
+
+// ===== Identifiers =====
+
+identifier = letter { letter | unicode_digit } .
+
+
+// ===== Keywords =====
+
+break        default      func         interface    select
+case         defer        go           map          struct
+chan         else         goto         package      switch
+const        fallthrough  if           range        type
+continue     for          import       return       var
+
+
+// ===== Operators and punctuation =====
+
++    &     +=    &=     &&    ==    !=    (    )
+-    |     -=    |=     ||    <     <=    [    ]
+*    ^     *=    ^=     <-    >     >=    {    }
+/    <<    /=    <<=    ++    =     :=    ,    ;
+%    >>    %=    >>=    --    !     ...   .    :
+     &^          &^=          ~
+
+
+// ===== Integer literals =====
+
+int_lit        = decimal_lit | binary_lit | octal_lit | hex_lit .
+decimal_lit    = "0" | ( "1" … "9" ) [ [ "_" ] decimal_digits ] .
+binary_lit     = "0" ( "b" | "B" ) [ "_" ] binary_digits .
+octal_lit      = "0" [ "o" | "O" ] [ "_" ] octal_digits .
+hex_lit        = "0" ( "x" | "X" ) [ "_" ] hex_digits .
+
+decimal_digits = decimal_digit { [ "_" ] decimal_digit } .
+binary_digits  = binary_digit { [ "_" ] binary_digit } .
+octal_digits   = octal_digit { [ "_" ] octal_digit } .
+hex_digits     = hex_digit { [ "_" ] hex_digit } .
+
+
+// ===== Floating-point literals =====
+
+float_lit         = decimal_float_lit | hex_float_lit .
+
+decimal_float_lit = decimal_digits "." [ decimal_digits ] [ decimal_exponent ] |
+                    decimal_digits decimal_exponent |
+                    "." decimal_digits [ decimal_exponent ] .
+decimal_exponent  = ( "e" | "E" ) [ "+" | "-" ] decimal_digits .
+
+hex_float_lit     = "0" ( "x" | "X" ) hex_mantissa hex_exponent .
+hex_mantissa      = [ "_" ] hex_digits "." [ hex_digits ] |
+                    [ "_" ] hex_digits |
+                    "." hex_digits .
+hex_exponent      = ( "p" | "P" ) [ "+" | "-" ] decimal_digits .
+
+
+// ===== Imaginary literals =====
+
+imaginary_lit = (decimal_digits | int_lit | float_lit) "i" .
+
+
+// ===== Rune literals =====
+
+\a   U+0007 alert or bell
+\b   U+0008 backspace
+\f   U+000C form feed
+\n   U+000A line feed or newline
+\r   U+000D carriage return
+\t   U+0009 horizontal tab
+\v   U+000B vertical tab
+\\   U+005C backslash
+\'   U+0027 single quote  (valid escape only within rune literals)
+\"   U+0022 double quote  (valid escape only within string literals)
+
+rune_lit         = "'" ( unicode_value | byte_value ) "'" .
+unicode_value    = unicode_char | little_u_value | big_u_value | escaped_char .
+byte_value       = octal_byte_value | hex_byte_value .
+octal_byte_value = `\` octal_digit octal_digit octal_digit .
+hex_byte_value   = `\` "x" hex_digit hex_digit .
+little_u_value   = `\` "u" hex_digit hex_digit hex_digit hex_digit .
+big_u_value      = `\` "U" hex_digit hex_digit hex_digit hex_digit
+                           hex_digit hex_digit hex_digit hex_digit .
+escaped_char     = `\` ( "a" | "b" | "f" | "n" | "r" | "t" | "v" | `\` | "'" | `"` ) .
+
+
+// ===== String literals =====
+
+string_lit             = raw_string_lit | interpreted_string_lit .
+raw_string_lit         = "`" { unicode_char | newline } "`" .
+interpreted_string_lit = `"` { unicode_value | byte_value } `"` .
+
+
+// ===== Types =====
+
+Type     = TypeName [ TypeArgs ] | TypeLit | "(" Type ")" .
+TypeName = identifier | QualifiedIdent .
+TypeArgs = "[" TypeList [ "," ] "]" .
+TypeList = Type { "," Type } .
+TypeLit  = ArrayType | StructType | PointerType | FunctionType | InterfaceType |
+           SliceType | MapType | ChannelType .
+
+
+// ===== Array types =====
+
+ArrayType   = "[" ArrayLength "]" ElementType .
+ArrayLength = Expression .
+ElementType = Type .
+
+
+// ===== Slice types =====
+
+SliceType = "[" "]" ElementType .
+
+
+// ===== Struct types =====
+
+StructType    = "struct" "{" { FieldDecl ";" } "}" .
+FieldDecl     = (IdentifierList Type | EmbeddedField) [ Tag ] .
+EmbeddedField = [ "*" ] TypeName [ TypeArgs ] .
+Tag           = string_lit .
+
+
+// ===== Pointer types =====
+
+PointerType = "*" BaseType .
+BaseType    = Type .
+
+
+// ===== Function types =====
+
+FunctionType  = "func" Signature .
+Signature     = Parameters [ Result ] .
+Result        = Parameters | Type .
+Parameters    = "(" [ ParameterList [ "," ] ] ")" .
+ParameterList = ParameterDecl { "," ParameterDecl } .
+ParameterDecl = [ IdentifierList ] [ "..." ] Type .
+
+
+// ===== Interface types =====
+
+InterfaceType  = "interface" "{" { InterfaceElem ";" } "}" .
+InterfaceElem  = MethodElem | TypeElem .
+MethodElem     = MethodName Signature .
+MethodName     = identifier .
+TypeElem       = TypeTerm { "|" TypeTerm } .
+TypeTerm       = Type | UnderlyingType .
+UnderlyingType = "~" Type .
+
+
+// ===== Map types =====
+
+MapType = "map" "[" KeyType "]" ElementType .
+KeyType = Type .
+
+
+// ===== Channel types =====
+
+ChannelType = ( "chan" | "chan" "<-" | "<-" "chan" ) ElementType .
+
+
+// ===== Blocks =====
+
+Block         = "{" StatementList "}" .
+StatementList = { Statement ";" } .
+
+
+// ===== Declarations and scope =====
+
+Declaration  = ConstDecl | TypeDecl | VarDecl .
+TopLevelDecl = Declaration | FunctionDecl | MethodDecl .
+
+
+// ===== Predeclared identifiers =====
+
+Types:
+	any bool byte comparable
+	complex64 complex128 error float32 float64
+	int int8 int16 int32 int64 rune string
+	uint uint8 uint16 uint32 uint64 uintptr
+
+Constants:
+	true false iota
+
+Zero value:
+	nil
+
+Functions:
+	append cap clear close complex copy delete imag len
+	make max min new panic print println real recover
+
+
+// ===== Constant declarations =====
+
+ConstDecl      = "const" ( ConstSpec | "(" { ConstSpec ";" } ")" ) .
+ConstSpec      = IdentifierList [ [ Type ] "=" ExpressionList ] .
+
+IdentifierList = identifier { "," identifier } .
+ExpressionList = Expression { "," Expression } .
+
+
+// ===== Type declarations =====
+
+TypeDecl = "type" ( TypeSpec | "(" { TypeSpec ";" } ")" ) .
+TypeSpec = AliasDecl | TypeDef .
+
+
+// ===== Alias declarations =====
+
+AliasDecl = identifier [ TypeParameters ] "=" Type .
+
+
+// ===== Type definitions =====
+
+TypeDef = identifier [ TypeParameters ] Type .
+
+
+// ===== Type parameter declarations =====
+
+TypeParameters = "[" TypeParamList [ "," ] "]" .
+TypeParamList  = TypeParamDecl { "," TypeParamDecl } .
+TypeParamDecl  = IdentifierList TypeConstraint .
+
+
+// ===== Type constraints =====
+
+TypeConstraint = TypeElem .
+
+
+// ===== Variable declarations =====
+
+VarDecl = "var" ( VarSpec | "(" { VarSpec ";" } ")" ) .
+VarSpec = IdentifierList ( Type [ "=" ExpressionList ] | "=" ExpressionList ) .
+
+
+// ===== Short variable declarations =====
+
+ShortVarDecl = IdentifierList ":=" ExpressionList .
+
+
+// ===== Function declarations =====
+
+FunctionDecl = "func" FunctionName [ TypeParameters ] Signature [ FunctionBody ] .
+FunctionName = identifier .
+FunctionBody = Block .
+
+
+// ===== Method declarations =====
+
+MethodDecl = "func" Receiver MethodName [ TypeParameters ] Signature [ FunctionBody ] .
+Receiver   = Parameters .
+
+
+// ===== Operands =====
+
+Operand     = Literal | OperandName [ TypeArgs ] | "(" Expression ")" .
+Literal     = BasicLit | CompositeLit | FunctionLit .
+BasicLit    = int_lit | float_lit | imaginary_lit | rune_lit | string_lit .
+OperandName = identifier | QualifiedIdent .
+
+
+// ===== Qualified identifiers =====
+
+QualifiedIdent = PackageName "." identifier .
+
+
+// ===== Composite literals =====
+
+CompositeLit = LiteralType LiteralValue .
+LiteralType  = StructType | ArrayType | "[" "..." "]" ElementType |
+               SliceType | MapType | TypeName [ TypeArgs ] .
+LiteralValue = "{" [ ElementList [ "," ] ] "}" .
+ElementList  = KeyedElement { "," KeyedElement } .
+KeyedElement = [ Key ":" ] Element .
+Key          = FieldName | Expression | LiteralValue .
+FieldName    = identifier .
+Element      = Expression | LiteralValue .
+
+
+// ===== Function literals =====
+
+FunctionLit = "func" Signature FunctionBody .
+
+
+// ===== Primary expressions =====
+
+PrimaryExpr   = Operand |
+                Conversion |
+                MethodExpr |
+                PrimaryExpr Selector |
+                PrimaryExpr Index |
+                PrimaryExpr Slice |
+                PrimaryExpr TypeAssertion |
+                PrimaryExpr Arguments .
+
+Selector      = "." identifier .
+Index         = "[" Expression [ "," ] "]" .
+Slice         = "[" [ Expression ] ":" [ Expression ] "]" |
+                "[" [ Expression ] ":" Expression ":" Expression "]" .
+TypeAssertion = "." "(" Type ")" .
+Arguments     = "(" [ ( ExpressionList | Type [ "," ExpressionList ] ) [ "..." ] [ "," ] ] ")" .
+
+
+// ===== Method expressions =====
+
+MethodExpr   = ReceiverType "." MethodName .
+ReceiverType = Type .
+
+
+// ===== Operators =====
+
+Expression = UnaryExpr | Expression binary_op Expression .
+UnaryExpr  = PrimaryExpr | unary_op UnaryExpr .
+
+binary_op  = "||" | "&&" | rel_op | add_op | mul_op .
+rel_op     = "==" | "!=" | "<" | "<=" | ">" | ">=" .
+add_op     = "+" | "-" | "|" | "^" .
+mul_op     = "*" | "/" | "%" | "<<" | ">>" | "&" | "&^" .
+
+unary_op   = "+" | "-" | "!" | "^" | "*" | "&" | "<-" .
+
+
+// ===== Operator precedence =====
+
+Precedence    Operator
+    5             *  /  %  <<  >>  &  &^
+    4             +  -  |  ^
+    3             ==  !=  <  <=  >  >=
+    2             &&
+    1             ||
+
+
+// ===== Conversions =====
+
+Conversion = Type "(" Expression [ "," ] ")" .
+
+
+// ===== Statements =====
+
+Statement  = Declaration | LabeledStmt | SimpleStmt |
+             GoStmt | ReturnStmt | BreakStmt | ContinueStmt | GotoStmt |
+             FallthroughStmt | Block | IfStmt | SwitchStmt | SelectStmt | ForStmt |
+             DeferStmt .
+
+SimpleStmt = EmptyStmt | ExpressionStmt | SendStmt | IncDecStmt | Assignment | ShortVarDecl .
+
+
+// ===== Empty statements =====
+
+EmptyStmt = .
+
+
+// ===== Labeled statements =====
+
+LabeledStmt = Label ":" Statement .
+Label       = identifier .
+
+
+// ===== Expression statements =====
+
+ExpressionStmt = Expression .
+
+
+// ===== Send statements =====
+
+SendStmt = Channel "<-" Expression .
+Channel  = Expression .
+
+
+// ===== IncDec statements =====
+
+IncDecStmt = Expression ( "++" | "--" ) .
+
+
+// ===== Assignment statements =====
+
+Assignment = ExpressionList assign_op ExpressionList .
+
+assign_op  = [ add_op | mul_op ] "=" .
+
+
+// ===== If statements =====
+
+IfStmt = "if" [ SimpleStmt ";" ] Expression Block [ "else" ( IfStmt | Block ) ] .
+
+
+// ===== Switch statements =====
+
+SwitchStmt = ExprSwitchStmt | TypeSwitchStmt .
+
+
+// ===== Expression switches =====
+
+ExprSwitchStmt = "switch" [ SimpleStmt ";" ] [ Expression ] "{" { ExprCaseClause } "}" .
+ExprCaseClause = ExprSwitchCase ":" StatementList .
+ExprSwitchCase = "case" ExpressionList | "default" .
+
+
+// ===== Type switches =====
+
+TypeSwitchStmt  = "switch" [ SimpleStmt ";" ] TypeSwitchGuard "{" { TypeCaseClause } "}" .
+TypeSwitchGuard = [ identifier ":=" ] PrimaryExpr "." "(" "type" ")" .
+TypeCaseClause  = TypeSwitchCase ":" StatementList .
+TypeSwitchCase  = "case" TypeList | "default" .
+
+
+// ===== For statements =====
+
+ForStmt   = "for" [ Condition | ForClause | RangeClause ] Block .
+Condition = Expression .
+
+
+// ===== For statements with for clause =====
+
+ForClause = [ InitStmt ] ";" [ Condition ] ";" [ PostStmt ] .
+InitStmt  = SimpleStmt .
+PostStmt  = SimpleStmt .
+
+
+// ===== For statements with range clause =====
+
+RangeClause = [ ExpressionList "=" | IdentifierList ":=" ] "range" Expression .
+
+
+// ===== Go statements =====
+
+GoStmt = "go" Expression .
+
+
+// ===== Select statements =====
+
+SelectStmt = "select" "{" { CommClause } "}" .
+CommClause = CommCase ":" StatementList .
+CommCase   = "case" ( SendStmt | RecvStmt ) | "default" .
+RecvStmt   = [ ExpressionList "=" | IdentifierList ":=" ] RecvExpr .
+RecvExpr   = Expression .
+
+
+// ===== Return statements =====
+
+ReturnStmt = "return" [ ExpressionList ] .
+
+
+// ===== Break statements =====
+
+BreakStmt = "break" [ Label ] .
+
+
+// ===== Continue statements =====
+
+ContinueStmt = "continue" [ Label ] .
+
+
+// ===== Goto statements =====
+
+GotoStmt = "goto" Label .
+
+
+// ===== Fallthrough statements =====
+
+FallthroughStmt = "fallthrough" .
+
+
+// ===== Defer statements =====
+
+DeferStmt = "defer" Expression .
+
+
+// ===== Source file organization =====
+
+SourceFile = PackageClause ";" { ImportDecl ";" } { TopLevelDecl ";" } .
+
+
+// ===== Package clause =====
+
+PackageClause = "package" PackageName .
+PackageName   = identifier .
+
+
+// ===== Import declarations =====
+
+ImportDecl = "import" ( ImportSpec | "(" { ImportSpec ";" } ")" ) .
+ImportSpec = [ "." | PackageName ] ImportPath .
+ImportPath = string_lit .
