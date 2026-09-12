@@ -7,8 +7,14 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v5
       - uses: leanprover/lean-action@v1
+      # The default test driver only runs lexer checks
+      - run: lake exe integration_tests

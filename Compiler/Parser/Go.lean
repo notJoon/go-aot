@@ -61,33 +61,117 @@ private def stringLiteral (source : Source) : P Syntax.Expr := do
   | some text => return .stringLiteral text.copy token.span
   | none => Parser.fail "invalid string literal span"
 
+private def intLiteral (source : Source) : P Syntax.Expr := do
+  let token ← Parser.label
+    (Parser.satisfy (fun token => token.kind == TokenKind.intLiteral))
+    "expected integer literal"
+  match source.slice? token.span with
+  | some text => return .intLiteral text.copy token.span
+  | none => Parser.fail "invalid integer literal span"
+
+private def peekSymbol (text : String) : P Bool := do
+  match ← Parser.peek? with
+  | some { kind := .symbol actual, .. } => return actual == text
+  | _ => return false
+
+private def statementEnd : P Unit := do
+  if ← peekSymbol "}" then return ()
+  let _ ← semicolon
+  return ()
+
 mutual
   private partial def expression (source : Source) : P Syntax.Expr :=
-    stringLiteral source <|> callExpression source
+    comparison source
 
-  private partial def callExpression (source : Source) : P Syntax.Expr := do
-    let callee ← identifier source
-    let first ← symbol "("
-    let argument ← expression source
-    let last ← symbol ")"
-    return .call callee argument ⟨first.span.start, last.span.stop⟩
+  private partial def comparison (source : Source) : P Syntax.Expr := do
+    let left ← additive source
+    if ← peekSymbol "<" then
+      let _ ← symbol "<"
+      let right ← additive source
+      return .binary .less left right ⟨left.span.start, right.span.stop⟩
+    return left
+
+  private partial def additive (source : Source) : P Syntax.Expr := do
+    additiveRest source (← primary source)
+
+  private partial def additiveRest (source : Source) (left : Syntax.Expr) : P Syntax.Expr := do
+    let op? ← if ← peekSymbol "+" then
+        let _ ← symbol "+"
+        pure (some Syntax.BinaryOp.add)
+      else if ← peekSymbol "-" then
+        let _ ← symbol "-"
+        pure (some Syntax.BinaryOp.subtract)
+      else pure none
+    match op? with
+    | none => return left
+    | some op =>
+      let right ← primary source
+      additiveRest source (.binary op left right ⟨left.span.start, right.span.stop⟩)
+
+  private partial def primary (source : Source) : P Syntax.Expr :=
+    stringLiteral source <|> intLiteral source <|> do
+      let name ← identifier source
+      unless ← peekSymbol "(" do return .identifier name
+      let _ ← symbol "("
+      let arguments ← argumentList source
+      let last ← symbol ")"
+      return .call name arguments ⟨name.span.start, last.span.stop⟩
+
+  private partial def argumentList (source : Source) : P (Array Syntax.Expr) := do
+    if ← peekSymbol ")" then return #[]
+    let mut arguments := #[← expression source]
+    while ← peekSymbol "," do
+      let _ ← symbol ","
+      arguments := arguments.push (← expression source)
+    return arguments
+
+  private partial def statement (source : Source) : P Syntax.Stmt :=
+    returnStatement source <|> ifStatement source <|> do
+      let value ← expression source
+      statementEnd
+      return .expr value
+
+  private partial def returnStatement (source : Source) : P Syntax.Stmt := do
+    let _ ← keyword "return"
+    let value ← expression source
+    statementEnd
+    return .return value
+
+  private partial def ifStatement (source : Source) : P Syntax.Stmt := do
+    let _ ← keyword "if"
+    let condition ← expression source
+    let (body, _) ← block source
+    statementEnd
+    return .ifThen condition body
+
+  private partial def block (source : Source) : P (Array Syntax.Stmt × Token) := do
+    let _ ← symbol "{"
+    let body ← Parser.many (statement source)
+    let last ← symbol "}"
+    return (body, last)
 end
 
-private def statement (source : Source) : P Syntax.Stmt := do
-  let value ← expression source
-  let _ ← semicolon
-  return .expr value
+private def parameter (source : Source) : P Syntax.Parameter := do
+  return ⟨← identifier source, ← identifier source⟩
+
+private def parameterList (source : Source) : P (Array Syntax.Parameter) := do
+  if ← peekSymbol ")" then return #[]
+  let mut parameters := #[← parameter source]
+  while ← peekSymbol "," do
+    let _ ← symbol ","
+    parameters := parameters.push (← parameter source)
+  return parameters
 
 private def functionDecl (source : Source) : P Syntax.FunctionDecl := do
   let first ← keyword "func"
   let name ← identifier source
   let _ ← symbol "("
+  let parameters ← parameterList source
   let _ ← symbol ")"
-  let _ ← symbol "{"
-  let body ← Parser.many (statement source)
-  let last ← symbol "}"
+  let resultType ← if ← peekSymbol "{" then pure none else some <$> identifier source
+  let (body, last) ← block source
   let _ ← semicolon
-  return ⟨name, body, ⟨first.span.start, last.span.stop⟩⟩
+  return ⟨name, parameters, resultType, body, ⟨first.span.start, last.span.stop⟩⟩
 
 private def file (source : Source) : P Syntax.File := do
   let packageName ← packageClause source

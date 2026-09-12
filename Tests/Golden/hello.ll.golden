@@ -1,0 +1,31 @@
+@.str.0 = private unnamed_addr constant [14 x i8] c"Hello, world!\00"
+
+declare i32 @putchar(i32)
+
+define internal void @goaot.print_line(ptr %bytes, i64 %length) {
+entry:
+  br label %loop
+
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %body ]
+  %done = icmp eq i64 %index, %length
+  br i1 %done, label %exit, label %body
+
+body:
+  %address = getelementptr i8, ptr %bytes, i64 %index
+  %byte = load i8, ptr %address
+  %char = zext i8 %byte to i32
+  call i32 @putchar(i32 %char)
+  %next = add i64 %index, 1
+  br label %loop
+
+exit:
+  call i32 @putchar(i32 10)
+  ret void
+}
+
+define i32 @main() {
+entry:
+  call void @goaot.print_line(ptr @.str.0, i64 13)
+  ret i32 0
+}
