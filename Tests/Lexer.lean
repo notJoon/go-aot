@@ -1,4 +1,4 @@
-import GoAot
+import Compiler.Lexer
 
 open GoAot
 
@@ -9,7 +9,7 @@ private def token (kind : TokenKind) (start stop : Nat) : Token :=
   ⟨kind, ⟨start, stop⟩, false⟩
 
 private def checkSemis (text : String) (tokens : Array Token) (positions : Array Nat) : IO Unit := do
-  let .ok result := insertSemicolons (Source.ofString text) tokens
+  let .ok result := Lexer.Internal.insertSemicolons (Source.ofString text) tokens
     | throw (IO.userError s!"insertion failed: {text}")
   check (result.filter (! ·.inserted) == tokens) "source tokens changed"
   check (result.filter (·.inserted) == positions.map (fun p => ⟨.semicolon, ⟨p, p⟩, true⟩))
@@ -202,7 +202,7 @@ def lexerMain : IO Unit := do
   for spelling in ["if", "for", "else", "func", "goto"] do
     checkSemis spelling #[token (.keyword spelling) 0 spelling.utf8ByteSize] #[]
   for tokens in [#[ident 1 0], #[ident 0 2], #[ident 0 1, ident 0 1]] do
-    check (match insertSemicolons (Source.ofString "x") tokens with
+    check (match Lexer.Internal.insertSemicolons (Source.ofString "x") tokens with
       | .error _ => true | .ok _ => false) "invalid spans accepted"
 
   -- A zero-width synthetic token still commits a parser alternative.

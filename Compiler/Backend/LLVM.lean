@@ -9,9 +9,6 @@ namespace GoAot.Backend.LLVM
 private def llvmName (name : String) : String :=
   if name == "main" then name else "go_" ++ name
 
-private def findFunction? (program : IR.Program) (name : String) : Option IR.Function :=
-  program.functions.find? fun function => function.name == name
-
 -- Collect declarations and deduplicate string globals before any function is emitted.
 private partial def collectRuntimeNeeds (instructions : Array IR.Instruction) :
     Array ByteArray × Bool := Id.run do
@@ -47,55 +44,43 @@ private def emitBytes (bytes : ByteArray) : String := Id.run do
   for byte in bytes do result := result ++ escapeByte byte
   return result
 
-private def stringIndex (strings : Array ByteArray) (bytes : ByteArray) : Except String Nat := do
-  for i in [:strings.size] do
-    if strings[i]! == bytes then return i
-  throw "internal error: missing string literal"
-
-private def localIndex (function : IR.Function) (name : String) : Except String Nat := do
-  for i in [:function.parameters.size] do
-    if function.parameters[i]! == name then return i
-  throw s!"unsupported local '{name}'"
-
 -- Recursive emission follows source order and gives each computed value a fresh SSA name.
-private partial def emitExpr (program : IR.Program) (function : IR.Function) (nextValue : Nat) :
-    IR.Expr → Except String (String × String × Nat)
-  | .intLiteral value => do
-    if value > 9223372036854775807 then
-      throw "integer literal exceeds signed 64-bit range"
-    return ("", toString value, nextValue)
-  | .local name => return ("", s!"%arg{← localIndex function name}", nextValue)
-  | .call name arguments => do
-    let some callee := findFunction? program name | throw s!"unknown function '{name}'"
-    if name == "main" then throw "main does not return a value"
-    if arguments.size != callee.parameters.size then
-      throw s!"function '{name}' expects {callee.parameters.size} arguments"
+private partial def emitExpr (nextValue : Nat) :
+    IR.IntExpr → String × String × Nat
+  | .literal value => ("", toString value, nextValue)
+  | .argument index => ("", s!"%arg{index}", nextValue)
+  | .call name arguments => Id.run do
     let mut output := ""
     let mut values := #[]
     let mut next := nextValue
     for argument in arguments do
-      let (code, value, after) ← emitExpr program function next argument
+      let (code, value, after) := emitExpr next argument
       output := output ++ code
       values := values.push ("i64 " ++ value)
       next := after
     let result := s!"%v{next}"
     return (output ++ s!"  {result} = call i64 @{llvmName name}(" ++
       String.intercalate ", " values.toList ++ ")\n", result, next + 1)
-  | .binary op left right => do
-    let (leftCode, leftValue, next) ← emitExpr program function nextValue left
-    let (rightCode, rightValue, next) ← emitExpr program function next right
+  | expression@(.add left right) | expression@(.subtract left right) =>
+    let (leftCode, leftValue, next) := emitExpr nextValue left
+    let (rightCode, rightValue, next) := emitExpr next right
     let result := s!"%v{next}"
-    let operation := match op with
-      | .add => "add i64"
-      | .subtract => "sub i64"
-      | .less => "icmp slt i64"
-    return (leftCode ++ rightCode ++
+    let operation := match expression with | .add .. => "add i64" | _ => "sub i64"
+    (leftCode ++ rightCode ++
       s!"  {result} = {operation} {leftValue}, {rightValue}\n", result, next + 1)
 
+private def emitBoolExpr (nextValue : Nat) : IR.BoolExpr → String × String × Nat
+  | .less left right =>
+    let (leftCode, leftValue, next) := emitExpr nextValue left
+    let (rightCode, rightValue, next) := emitExpr next right
+    let result := s!"%v{next}"
+    (leftCode ++ rightCode ++
+      s!"  {result} = icmp slt i64 {leftValue}, {rightValue}\n", result, next + 1)
+
 -- The final flag records whether the current block already owns its required terminator.
-private partial def emitInstructions (program : IR.Program) (function : IR.Function)
+private partial def emitInstructions
     (strings : Array ByteArray) (instructions : Array IR.Instruction)
-    (nextValue nextBlock : Nat) : Except String (String × Nat × Nat × Bool) := do
+    (nextValue nextBlock : Nat) : String × Nat × Nat × Bool := Id.run do
   let mut output := ""
   let mut value := nextValue
   let mut block := nextBlock
@@ -104,23 +89,22 @@ private partial def emitInstructions (program : IR.Program) (function : IR.Funct
     unless terminated do
       match instruction with
       | .printString bytes =>
-        let index ← stringIndex strings bytes
+        let index := strings.idxOf bytes
         output := output ++ s!"  call void @goaot.print_line(ptr @.str.{index}, i64 {bytes.size})\n"
       | .printInt expression =>
-        let (code, result, next) ← emitExpr program function value expression
+        let (code, result, next) := emitExpr value expression
         output := output ++ code ++ s!"  call i32 (ptr, ...) @printf(ptr @.int_format, i64 {result})\n"
         value := next
       | .return expression =>
-        if function.name == "main" then throw "main cannot return a value"
-        let (code, result, next) ← emitExpr program function value expression
+        let (code, result, next) := emitExpr value expression
         output := output ++ code ++ s!"  ret i64 {result}\n"
         value := next
         terminated := true
       | .ifThen condition body =>
-        let (conditionCode, conditionValue, next) ← emitExpr program function value condition
+        let (conditionCode, conditionValue, next) := emitBoolExpr value condition
         let label := block
-        let (bodyCode, afterValue, afterBlock, bodyTerminated) ←
-          emitInstructions program function strings body next (block + 1)
+        let (bodyCode, afterValue, afterBlock, bodyTerminated) :=
+          emitInstructions strings body next (block + 1)
         output := output ++ conditionCode ++
           s!"  br i1 {conditionValue}, label %if.then.{label}, label %if.end.{label}\n\n" ++
           s!"if.then.{label}:\n" ++ bodyCode ++
@@ -130,24 +114,18 @@ private partial def emitInstructions (program : IR.Program) (function : IR.Funct
         block := afterBlock
   return (output, value, block, terminated)
 
-private def emitFunction (program : IR.Program) (strings : Array ByteArray)
-    (function : IR.Function) : Except String String := do
-  if function.name == "main" && !function.parameters.isEmpty then
-    throw "LLVM backend requires main with no parameters"
+private def emitFunction (strings : Array ByteArray)
+    (function : IR.Function) : String := Id.run do
   let parameters := function.parameters.mapIdx fun index _ => s!"i64 %arg{index}"
   let linkage := if function.name == "main" then "" else "internal "
   let resultType := if function.name == "main" then "i32" else "i64"
-  let (body, _, _, terminated) ← emitInstructions program function strings function.body 0 0
-  if function.name != "main" && !terminated then
-    throw s!"function '{function.name}' must return a value"
+  let (body, _, _, _) := emitInstructions strings function.body 0 0
   return s!"define {linkage}{resultType} @{llvmName function.name}(" ++
     String.intercalate ", " parameters.toList ++ ") {\nentry:\n" ++ body ++
     (if function.name == "main" then "  ret i32 0\n" else "") ++ "}\n"
 
-def emit (program : IR.Program) : Except String String := do
-  let some main := findFunction? program "main" | throw "LLVM backend requires a main function"
-  unless main.parameters.isEmpty do throw "LLVM backend requires main with no parameters"
-
+-- Like the C backend, consumes programs validated by Lowering.
+def emit (program : IR.Program) : String := Id.run do
   let mut strings := #[]
   let mut needsIntFormat := false
   for function in program.functions do
@@ -181,7 +159,7 @@ def emit (program : IR.Program) : Except String String := do
     "  call i32 @putchar(i32 %char)\n  %next = add i64 %index, 1\n" ++
     "  br label %loop\n\nexit:\n  call i32 @putchar(i32 10)\n  ret void\n}\n\n"
   for function in program.functions do
-    output := output ++ (← emitFunction program strings function) ++ "\n"
+    output := output ++ emitFunction strings function ++ "\n"
   return (output.dropEnd 1).toString
 
 end GoAot.Backend.LLVM

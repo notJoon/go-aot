@@ -1,4 +1,5 @@
 import GoAot
+import Compiler.Parser.Go
 
 open GoAot
 
@@ -156,4 +157,16 @@ def goldenMain : IO Unit := do
   checkSameRejection "package main\nfunc main() { println(missing()) }\n"
   checkSameRejection "package main\nfunc f(n int) int { return n }\nfunc main() { println(f()) }\n"
   checkSameRejection "package main\nfunc main() { println(9223372036854775808) }\n"
+  for (source, expected) in [
+      ("package main\nfunc main() { println(1 < 2) }\n", "println supports only string and int"),
+      ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "return value must be int"),
+      ("package main\nfunc main() { if 1 { println(2) } }\n", "if condition must be bool"),
+      ("package main\nfunc f(n int) int { return n }\nfunc main() { println(f(1 < 2)) }\n",
+        "function arguments must be int"),
+      ("package main\nfunc main() { println(missing) }\n", "unknown identifier 'missing'")] do
+    checkSameRejection source
+    check (match compileToC (Source.ofString source) with
+      | .error message => message == expected
+      | .ok _ => false)
+      s!"wrong lowering error: {source}"
   IO.println "Go parser and AOT tests: OK"

@@ -7,9 +7,9 @@ public section
 
 namespace GoAot.Lowering
 
-private inductive ValueType where
-  | int | bool
-  deriving BEq
+private inductive Scalar where
+  | int (value : IR.IntExpr)
+  | bool (value : IR.BoolExpr)
 
 private structure Signature where
   name : String
@@ -111,17 +111,18 @@ private def decodeString (literal : String) : Except String ByteArray := do
   | _ => throw "raw string literals are not supported yet"
 
 private partial def lowerScalar (all : Array Signature) (locals : Array String) :
-    Syntax.Expr → Except String (IR.Expr × ValueType)
+    Syntax.Expr → Except String Scalar
   | .intLiteral text _ =>
     match text.toNat? with
     | some value => do
       if value > 9223372036854775807 then
         throw "integer literal exceeds signed 64-bit range"
-      return (.intLiteral value, .int)
+      return .int (.literal value)
     | none => throw s!"unsupported integer literal '{text}'"
-  | .identifier name =>
-    if locals.contains name.text then return (.local name.text, .int)
-    else throw s!"unknown identifier '{name.text}'"
+  | .identifier name => do
+    let some index := locals.findIdx? (· == name.text)
+      | throw s!"unknown identifier '{name.text}'"
+    return .int (.argument index)
   | .call callee arguments _ => do
     let some signature := findSignature? all callee.text
       | throw s!"unknown function '{callee.text}'"
@@ -131,19 +132,19 @@ private partial def lowerScalar (all : Array Signature) (locals : Array String) 
       throw s!"function '{callee.text}' expects {signature.parameters.size} arguments"
     let mut lowered := #[]
     for argument in arguments do
-      let (value, type) ← lowerScalar all locals argument
-      unless type == .int do throw "function arguments must be int"
+      let .int value ← lowerScalar all locals argument
+        | throw "function arguments must be int"
       lowered := lowered.push value
-    return (.call callee.text lowered, .int)
+    return .int (.call callee.text lowered)
   | .binary op left right _ => do
-    let (left, leftType) ← lowerScalar all locals left
-    let (right, rightType) ← lowerScalar all locals right
-    unless leftType == .int && rightType == .int do
-      throw "binary operands must be int"
+    let left ← lowerScalar all locals left
+    let right ← lowerScalar all locals right
+    let (.int left, .int right) := (left, right)
+      | throw "binary operands must be int"
     match op with
-    | .add => return (.binary .add left right, .int)
-    | .subtract => return (.binary .subtract left right, .int)
-    | .less => return (.binary .less left right, .bool)
+    | .add => return .int (.add left right)
+    | .subtract => return .int (.subtract left right)
+    | .less => return .bool (.less left right)
   | .stringLiteral _ _ => throw "expected int expression"
 
 mutual
@@ -159,18 +160,18 @@ mutual
       | .stringLiteral literal _ =>
         return .printString (← decodeString literal)
       | _ =>
-        let (value, type) ← lowerScalar all signature.parameters argument
-        unless type == .int do throw "println supports only string and int"
+        let .int value ← lowerScalar all signature.parameters argument
+          | throw "println supports only string and int"
         return .printInt value
     | .expr _ => throw "only function calls may be used as statements"
     | .return value => do
       unless signature.returnsInt do throw s!"function '{signature.name}' returns no value"
-      let (value, type) ← lowerScalar all signature.parameters value
-      unless type == .int do throw "return value must be int"
+      let .int value ← lowerScalar all signature.parameters value
+        | throw "return value must be int"
       return .return value
     | .ifThen condition body => do
-      let (condition, type) ← lowerScalar all signature.parameters condition
-      unless type == .bool do throw "if condition must be bool"
+      let .bool condition ← lowerScalar all signature.parameters condition
+        | throw "if condition must be bool"
       return .ifThen condition (← lowerStatements all signature body)
 
   private partial def lowerStatements (all : Array Signature) (signature : Signature)

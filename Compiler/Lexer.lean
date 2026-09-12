@@ -40,8 +40,8 @@ Keep raw string spans intact, including their internal newlines.
 
 This implements lexical insertion only. Omission before `)` and `}` belongs to the grammar parser.
 -/
--- TODO: Make this private, or model source and inserted tokens separately, before exposing it as an API.
-def insertSemicolons (source : Source) (tokens : Array Token) : Except String (Array Token) := do
+-- Internal test seam for raw token validation; compiler callers use lex.
+def Lexer.Internal.insertSemicolons (source : Source) (tokens : Array Token) : Except String (Array Token) := do
   let sourceSize := source.text.utf8ByteSize
   let mut result := Array.emptyWithCapacity tokens.size
   let mut stop := 0
@@ -667,6 +667,6 @@ def lex (source : Source) : Except String (Array Token) := do
       match source.position? off with
       | some p => .error s!"{p.line}:{p.column}: {e}"
       | none => .error s!"offset {off}: {e}"
-  insertSemicolons source raw
+  Lexer.Internal.insertSemicolons source raw
 
 end GoAot

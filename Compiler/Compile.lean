@@ -1,8 +1,9 @@
 module
 
-public import Compiler.Backend.C
-public import Compiler.Backend.LLVM
-public import Compiler.Lowering
+public import Compiler.Source
+import Compiler.Backend.C
+import Compiler.Backend.LLVM
+import Compiler.Lowering
 
 public section
 
@@ -14,6 +15,6 @@ def compileToC (source : Source) : Except String String := do
 
 /-- Compile the supported Go subset to target independent textual LLVM IR. -/
 def compileToLLVM (source : Source) : Except String String := do
-  Backend.LLVM.emit (← Lowering.lower (← parse source))
+  return Backend.LLVM.emit (← Lowering.lower (← parse source))
 
 end GoAot

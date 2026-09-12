@@ -18,29 +18,38 @@ private def emitParameters (parameters : Array String) : String := Id.run do
   return result
 
 -- Named temporaries preserve Go evaluation order because C leaves operand and argument order unspecified.
-private partial def emitExpr (indent : String) (nextTemp : Nat) :
-    IR.Expr → String × String × Nat
-  | .intLiteral value => ("", toString value, nextTemp)
-  | .local name => ("", "go_" ++ name, nextTemp)
+private partial def emitExpr (parameters : Array String) (indent : String) (nextTemp : Nat) :
+    IR.IntExpr → String × String × Nat
+  | .literal value => ("", toString value, nextTemp)
+  | .argument index => ("", "go_" ++ parameters[index]!, nextTemp)
   | .call name arguments => Id.run do
     let mut output := ""
     let mut values := #[]
     let mut next := nextTemp
     for argument in arguments do
-      let (code, value, after) := emitExpr indent next argument
+      let (code, value, after) := emitExpr parameters indent next argument
       output := output ++ code
       values := values.push value
       next := after
     let result := s!"go_tmp_{next}"
     return (output ++ indent ++ s!"int64_t {result} = {cName name}(" ++
       String.intercalate ", " values.toList ++ ");\n", result, next + 1)
-  | .binary op left right =>
-    let (leftCode, leftValue, next) := emitExpr indent nextTemp left
-    let (rightCode, rightValue, next) := emitExpr indent next right
+  | expression@(.add left right) | expression@(.subtract left right) =>
+    let (leftCode, leftValue, next) := emitExpr parameters indent nextTemp left
+    let (rightCode, rightValue, next) := emitExpr parameters indent next right
     let result := s!"go_tmp_{next}"
-    let symbol := match op with | .add => "+" | .subtract => "-" | .less => "<"
+    let symbol := match expression with | .add .. => "+" | _ => "-"
     (leftCode ++ rightCode ++ indent ++
       s!"int64_t {result} = {leftValue} {symbol} {rightValue};\n", result, next + 1)
+
+private def emitBoolExpr (parameters : Array String) (indent : String) (nextTemp : Nat) :
+    IR.BoolExpr → String × String × Nat
+  | .less left right =>
+    let (leftCode, leftValue, next) := emitExpr parameters indent nextTemp left
+    let (rightCode, rightValue, next) := emitExpr parameters indent next right
+    let result := s!"go_tmp_{next}"
+    (leftCode ++ rightCode ++ indent ++
+      s!"int64_t {result} = {leftValue} < {rightValue};\n", result, next + 1)
 
 private def hexDigit : Nat → String
   | 0 => "0" | 1 => "1" | 2 => "2" | 3 => "3" | 4 => "4" | 5 => "5"
@@ -55,7 +64,8 @@ private def emitBytes (bytes : ByteArray) : String := Id.run do
   return result
 
 -- Explicit byte counts preserve embedded NUL values during string output.
-private partial def emitInstructions (instructions : Array IR.Instruction) (indent : String)
+private partial def emitInstructions (parameters : Array String)
+    (instructions : Array IR.Instruction) (indent : String)
     (nextTemp : Nat) : String × Nat :=
   Id.run do
     let mut result := ""
@@ -65,17 +75,18 @@ private partial def emitInstructions (instructions : Array IR.Instruction) (inde
       | .printString bytes => result := result ++ indent ++ "fwrite(\"" ++ emitBytes bytes ++
           s!"\", 1, {bytes.size}, stdout); putchar('\\n');\n"
       | .printInt expression =>
-        let (code, value, after) := emitExpr indent next expression
+        let (code, value, after) := emitExpr parameters indent next expression
         result := result ++ code ++ indent ++
           "printf(\"%lld\\n\", (long long)" ++ value ++ ");\n"
         next := after
       | .return expression =>
-        let (code, value, after) := emitExpr indent next expression
+        let (code, value, after) := emitExpr parameters indent next expression
         result := result ++ code ++ indent ++ "return " ++ value ++ ";\n"
         next := after
       | .ifThen condition body =>
-        let (conditionCode, conditionValue, afterCondition) := emitExpr indent next condition
-        let (body, afterBody) := emitInstructions body (indent ++ "  ") afterCondition
+        let (conditionCode, conditionValue, afterCondition) :=
+          emitBoolExpr parameters indent next condition
+        let (body, afterBody) := emitInstructions parameters body (indent ++ "  ") afterCondition
         result := result ++ conditionCode ++ indent ++ "if (" ++ conditionValue ++ ") {\n" ++
           body ++ indent ++ "}\n"
         next := afterBody
@@ -95,7 +106,7 @@ def emit (program : IR.Program) : String := Id.run do
       hasPrototype := true
   output := output ++ "\n"
   for function in program.functions do
-    let (body, _) := emitInstructions function.body "  " 0
+    let (body, _) := emitInstructions function.parameters function.body "  " 0
     output := output ++ "\n" ++ (if function.name == "main" then "" else "static ") ++
       emitHeader function ++ " {\n" ++ body
     if function.name == "main" then output := output ++ "  return 0;\n"
