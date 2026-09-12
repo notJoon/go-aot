@@ -16,8 +16,8 @@ globs = ["Compiler.+"]
 
 [[lean_exe]]
 name = "tests"
-root = "Tests.Lexer"
+root = "Tests.All"
 
-[[lean_exe]]
-name = "integration_tests"
-root = "Tests.Golden"
+[[lean_lib]]
+name = "Tests"
+globs = ["Tests.+"]

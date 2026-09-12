@@ -13,9 +13,5 @@ description = "execute goaot"
 run = "lake exe goaot"
 
 [tasks.test]
-description = "check source positions, Go lexing, and semicolon insertion"
+description = "run lexer, parser, lowering, and C/LLVM emission tests"
 run = "lake test"
-
-[tasks."test:integration"]
-description = "run parser golden tests"
-run = "lake exe integration_tests"

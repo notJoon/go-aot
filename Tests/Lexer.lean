@@ -160,7 +160,7 @@ private def lexMain : IO Unit := do
   | .ok _ => throw (IO.userError "accepted missing exponent")
   IO.println "Go lexer: OK"
 
-def main : IO Unit := do
+def lexerMain : IO Unit := do
   -- Compare binary search with a linear byte-by-byte position calculation, including EOF.
   for text in ["", "a", "\n", "\n\n", "a\r\nb\rc", "가\t나\n끝\n"] do
     let source := Source.ofString text

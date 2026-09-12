@@ -131,7 +131,7 @@ private def checkInvalidSSARejected : IO Unit := do
     }
     check (result.exitCode != 0) "LLVM verifier accepted invalid SSA"
 
-def main : IO Unit := do
+def goldenMain : IO Unit := do
   checkGolden "minimal"
   checkGolden "invalid"
   checkCompileGolden "hello"
