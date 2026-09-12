@@ -47,6 +47,10 @@ private def checkCompileGolden (name : String) : IO Unit := do
 private def clangCommand : String :=
   if System.Platform.isOSX then "/usr/bin/clang" else "clang"
 
+-- Verify input SSA and every transformed module before code generation.
+private def llvmOptions : Array String :=
+  #["-O2", "-Wno-override-module", "-Xclang", "-llvm-verify-each"]
+
 private def runGenerated (command language : String) (options : Array String)
     (generated : String) : IO IO.Process.Output :=
   IO.FS.withTempDir fun dir => do
@@ -72,14 +76,13 @@ private def checkLLVM (name : String) (golden : Bool := false) : IO Unit := do
       let optimizedPath := dir / "optimized.ll"
       let exePath := dir / "program"
       IO.FS.writeFile llvmPath actual
-      let compileArgs := #["-O2", "-Wno-override-module", "-x", "ir", llvmPath.toString,
-        "-o", exePath.toString]
+      let compileArgs := llvmOptions ++ #["-x", "ir", llvmPath.toString, "-o", exePath.toString]
       discard <| IO.Process.run { cmd := clangCommand, args := compileArgs }
       let output ← IO.Process.run { cmd := exePath.toString }
       check (output == expectedOutput) s!"wrong LLVM output: {name}: {repr output}"
       if name == "hello" then
-        let optimizeArgs := #["-O2", "-Wno-override-module", "-S", "-emit-llvm", "-x", "ir",
-          llvmPath.toString, "-o", optimizedPath.toString]
+        let optimizeArgs := llvmOptions ++ #["-S", "-emit-llvm", "-x", "ir", llvmPath.toString,
+          "-o", optimizedPath.toString]
         discard <| IO.Process.run { cmd := clangCommand, args := optimizeArgs }
         let optimized ← IO.FS.readFile optimizedPath
         check (optimized.contains "target datalayout") "optimized LLVM IR has no data layout"
@@ -99,7 +102,7 @@ private def checkDifferential (name : String) : IO Unit := do
   let .ok c := compileToC source | throw (IO.userError s!"C rejected {name}")
   let .ok llvm := compileToLLVM source | throw (IO.userError s!"LLVM rejected {name}")
   let cOutput ← runGenerated "cc" "c" #["-O2", "-std=c11"] c
-  let llvmOutput ← runGenerated clangCommand "ir" #["-O2", "-Wno-override-module"] llvm
+  let llvmOutput ← runGenerated clangCommand "ir" llvmOptions llvm
   check (cOutput.exitCode == llvmOutput.exitCode) s!"backend exit codes differ: {name}"
   check (cOutput.stdout == llvmOutput.stdout) s!"backend stdout differs: {name}"
   check (llvmOutput.exitCode == 0 && llvmOutput.stdout == expected) s!"wrong output: {name}"
@@ -112,10 +115,21 @@ private def checkNulString : IO Unit := do
   let .ok llvm := compileToLLVM (Source.ofString input)
     | throw (IO.userError "LLVM rejected the NUL string regression fixture")
   let cOutput ← runGenerated "cc" "c" #["-O2", "-std=c11"] c
-  let llvmOutput ← runGenerated clangCommand "ir" #["-O2", "-Wno-override-module"] llvm
+  let llvmOutput ← runGenerated clangCommand "ir" llvmOptions llvm
   let expected := ByteArray.mk #[97, 0, 98, 10]
   check (cOutput.exitCode == 0 && cOutput.stdout.toUTF8 == expected) "C changed NUL bytes"
   check (llvmOutput.exitCode == 0 && llvmOutput.stdout.toUTF8 == expected) "LLVM changed NUL bytes"
+
+private def checkInvalidSSARejected : IO Unit := do
+  IO.FS.withTempDir fun dir => do
+    let llvmPath := dir / "invalid.ll"
+    let objectPath := dir / "invalid.o"
+    IO.FS.writeFile llvmPath (← IO.FS.readFile "Tests/Golden/invalid_ssa.ll")
+    let result ← IO.Process.output {
+      cmd := clangCommand
+      args := llvmOptions ++ #["-x", "ir", "-c", llvmPath.toString, "-o", objectPath.toString]
+    }
+    check (result.exitCode != 0) "LLVM verifier accepted invalid SSA"
 
 def main : IO Unit := do
   checkGolden "minimal"
@@ -138,6 +152,7 @@ def main : IO Unit := do
   checkDifferential "semantics"
   checkDifferential "strings"
   checkNulString
+  checkInvalidSSARejected
   checkSameRejection "package main\nfunc main() { println(missing()) }\n"
   checkSameRejection "package main\nfunc f(n int) int { return n }\nfunc main() { println(f()) }\n"
   checkSameRejection "package main\nfunc main() { println(9223372036854775808) }\n"
