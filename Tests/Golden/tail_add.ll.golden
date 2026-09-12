@@ -28,7 +28,6 @@ if.end.0:
 define i32 @main() {
 entry:
   %v0 = call i64 @go_sum(i64 5)
-  call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([6 x i8], ptr @.int_format, i64 0, i64 0), i64 %v0)
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v0)
   ret i32 0
 }
-

@@ -26,7 +26,6 @@ exit:
 
 define i32 @main() {
 entry:
-  call void @goaot.print_line(ptr getelementptr inbounds ([14 x i8], ptr @.str.0, i64 0, i64 0), i64 13)
+  call void @goaot.print_line(ptr @.str.0, i64 13)
   ret i32 0
 }
-

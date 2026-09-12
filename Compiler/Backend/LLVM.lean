@@ -105,10 +105,10 @@ private partial def emitInstructions (program : IR.Program) (function : IR.Funct
       match instruction with
       | .printString bytes =>
         let index ← stringIndex strings bytes
-        output := output ++ s!"  call void @goaot.print_line(ptr getelementptr inbounds ([{bytes.size + 1} x i8], ptr @.str.{index}, i64 0, i64 0), i64 {bytes.size})\n"
+        output := output ++ s!"  call void @goaot.print_line(ptr @.str.{index}, i64 {bytes.size})\n"
       | .printInt expression =>
         let (code, result, next) ← emitExpr program function value expression
-        output := output ++ code ++ s!"  call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([6 x i8], ptr @.int_format, i64 0, i64 0), i64 {result})\n"
+        output := output ++ code ++ s!"  call i32 (ptr, ...) @printf(ptr @.int_format, i64 {result})\n"
         value := next
       | .return expression =>
         if function.name == "main" then throw "main cannot return a value"
@@ -182,6 +182,6 @@ def emit (program : IR.Program) : Except String String := do
     "  br label %loop\n\nexit:\n  call i32 @putchar(i32 10)\n  ret void\n}\n\n"
   for function in program.functions do
     output := output ++ (← emitFunction program strings function) ++ "\n"
-  return output
+  return (output.dropEnd 1).toString
 
 end GoAot.Backend.LLVM
