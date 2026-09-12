@@ -181,21 +181,15 @@ private def file (source : Source) : P Syntax.File := do
 
 end GoParser
 
-private def parserError (source : Source) (tokens : Array Token) (rest : TokenIterator)
-    (error : Parser.Error) : String :=
-  let offset := match tokens[rest.idx]? with
-    | some token => token.span.start
-    | none => source.text.utf8ByteSize
-
-  match source.position? offset with
-  | some position => s!"{position.line}:{position.column}: {error}"
-  | none => s!"offset {offset}: {error}"
-
-/-- TODO: improve this -/
-def parse (source : Source) : Except String Syntax.File := do
+/-- Internal source-to-syntax interface. Own lexing so callers cannot supply raw tokens. -/
+def parse (source : Source) : Except Diagnostic Syntax.File := do
   let tokens ← lex source
   match GoParser.file source ⟨tokens, 0⟩ with
   | .ok _ file => return file
-  | .err rest error => throw (parserError source tokens rest error)
+  | .err rest error =>
+    let span := match tokens[rest.idx]? with
+      | some token => token.span
+      | none => ⟨source.text.utf8ByteSize, source.text.utf8ByteSize⟩
+    throw ⟨.parser, some span, toString error⟩
 
 end GoAot

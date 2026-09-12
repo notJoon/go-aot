@@ -4,6 +4,14 @@ import Compiler.Backend.LLVM
 
 open GoAot
 
+-- Existing phase interfaces reject mixed inputs without result wrappers.
+example : Source → Except Diagnostic Syntax.File := parse
+example : Syntax.File → Except Diagnostic IR.Program := Lowering.lower
+#check_failure fun (raw : Array Token) => parse raw
+#check_failure fun (source : Source) => Lowering.lower source
+#check_failure fun (file : Syntax.File) => Backend.C.emit file
+#check_failure fun (file : Syntax.File) => Backend.LLVM.emit file
+
 -- These terms must fail because their expression types disagree.
 private def intValue : IR.IntExpr := .literal 1
 private def boolValue : IR.BoolExpr := .less intValue intValue

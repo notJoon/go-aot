@@ -7,6 +7,9 @@ public section
 
 namespace GoAot.Lowering
 
+private def diagnosticAt (span : Span) (message : String) : Diagnostic :=
+  ⟨.lowering, some span, message⟩
+
 private inductive Scalar where
   | int (value : IR.IntExpr)
   | bool (value : IR.BoolExpr)
@@ -27,27 +30,27 @@ private def validName (name : String) : Bool :=
   | first :: rest => (asciiLetter first || first == '_') &&
       rest.all fun c => asciiLetter c || asciiDigit c || c == '_'
 
-private def signatures (file : Syntax.File) : Except String (Array Signature) := do
+private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature) := do
   let mut result := #[]
   for function in file.functions do
     let name := function.name.text
-    unless validName name do throw s!"unsupported function name '{name}'"
+    unless validName name do throw (diagnosticAt function.name.span s!"unsupported function name '{name}'")
     if result.any (fun (signature : Signature) => signature.name == name) then
-      throw s!"duplicate function '{name}'"
+      throw (diagnosticAt function.name.span s!"duplicate function '{name}'")
     let mut parameters := #[]
     for parameter in function.parameters do
       if parameter.typeName.text != "int" then
-        throw s!"only int parameters are supported in function '{name}'"
+        throw (diagnosticAt parameter.typeName.span s!"only int parameters are supported in function '{name}'")
       unless validName parameter.name.text do
-        throw s!"unsupported parameter name '{parameter.name.text}'"
+        throw (diagnosticAt parameter.name.span s!"unsupported parameter name '{parameter.name.text}'")
       if parameters.contains parameter.name.text then
-        throw s!"duplicate parameter '{parameter.name.text}'"
+        throw (diagnosticAt parameter.name.span s!"duplicate parameter '{parameter.name.text}'")
       parameters := parameters.push parameter.name.text
     let returnsInt ← match function.resultType with
       | none => pure false
       | some resultType =>
         if resultType.text == "int" then pure true
-        else throw s!"only int return values are supported in function '{name}'"
+        else throw (diagnosticAt resultType.span s!"only int return values are supported in function '{name}'")
     result := result.push ⟨name, parameters, returnsInt⟩
   return result
 
@@ -62,13 +65,13 @@ private def digitValue (radix : Nat) (c : Char) : Option Nat :=
     else none
   value.filter (· < radix)
 
-private def takeDigits (radix : Nat) : Nat → List Char → Except String (Nat × List Char)
+private def takeDigits (span : Span) (radix : Nat) : Nat → List Char → Except Diagnostic (Nat × List Char)
   | 0, rest => return (0, rest)
   | count + 1, c :: rest => do
-    let some digit := digitValue radix c | throw "invalid string escape"
-    let (tail, rest) ← takeDigits radix count rest
+    let some digit := digitValue radix c | throw (diagnosticAt span "invalid string escape")
+    let (tail, rest) ← takeDigits span radix count rest
     return (digit * radix ^ count + tail, rest)
-  | _, [] => throw "incomplete string escape"
+  | _, [] => throw (diagnosticAt span "incomplete string escape")
 
 private def pushChar (bytes : ByteArray) (c : Char) : ByteArray := Id.run do
   let mut result := bytes
@@ -76,8 +79,8 @@ private def pushChar (bytes : ByteArray) (c : Char) : ByteArray := Id.run do
   return result
 
 -- Decode source escapes once at the semantic boundary so backends never reinterpret Go syntax.
-private partial def decodeStringChars (chars : List Char) (bytes : ByteArray) :
-    Except String ByteArray := do
+private partial def decodeStringChars (span : Span) (chars : List Char) (bytes : ByteArray) :
+    Except Diagnostic ByteArray := do
   match chars with
   | [] => return bytes
   | '\\' :: escaped :: rest =>
@@ -87,118 +90,119 @@ private partial def decodeStringChars (chars : List Char) (bytes : ByteArray) :
       | '\\' => some 92 | '"' => some 34
       | _ => none
     if let some byte := simple? then
-      decodeStringChars rest (bytes.push byte.toUInt8)
+      decodeStringChars span rest (bytes.push byte.toUInt8)
     else if escaped == 'x' then
-      let (value, rest) ← takeDigits 16 2 rest
-      decodeStringChars rest (bytes.push value.toUInt8)
+      let (value, rest) ← takeDigits span 16 2 rest
+      decodeStringChars span rest (bytes.push value.toUInt8)
     else if escaped == 'u' || escaped == 'U' then
-      let (value, rest) ← takeDigits 16 (if escaped == 'u' then 4 else 8) rest
-      decodeStringChars rest (pushChar bytes (Char.ofNat value))
+      let (value, rest) ← takeDigits span 16 (if escaped == 'u' then 4 else 8) rest
+      decodeStringChars span rest (pushChar bytes (Char.ofNat value))
     else if '0' <= escaped && escaped <= '7' then
-      let (tail, rest) ← takeDigits 8 2 rest
-      decodeStringChars rest (bytes.push ((escaped.toNat - '0'.toNat) * 64 + tail).toUInt8)
+      let (tail, rest) ← takeDigits span 8 2 rest
+      decodeStringChars span rest (bytes.push ((escaped.toNat - '0'.toNat) * 64 + tail).toUInt8)
     else
-      throw "invalid string escape"
-  | '\\' :: [] => throw "incomplete string escape"
-  | c :: rest => decodeStringChars rest (pushChar bytes c)
+      throw (diagnosticAt span "invalid string escape")
+  | '\\' :: [] => throw (diagnosticAt span "incomplete string escape")
+  | c :: rest => decodeStringChars span rest (pushChar bytes c)
 
-private def decodeString (literal : String) : Except String ByteArray := do
+private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray := do
   match literal.toList with
   | '"' :: rest =>
     match rest.reverse with
-    | '"' :: reversed => decodeStringChars reversed.reverse ByteArray.empty
-    | _ => throw "unterminated string literal"
-  | _ => throw "raw string literals are not supported yet"
+    | '"' :: reversed => decodeStringChars span reversed.reverse ByteArray.empty
+    | _ => throw (diagnosticAt span "unterminated string literal")
+  | _ => throw (diagnosticAt span "raw string literals are not supported yet")
 
 private partial def lowerScalar (all : Array Signature) (locals : Array String) :
-    Syntax.Expr → Except String Scalar
-  | .intLiteral text _ =>
+    Syntax.Expr → Except Diagnostic Scalar
+  | .intLiteral text span =>
     match text.toNat? with
     | some value => do
       if value > 9223372036854775807 then
-        throw "integer literal exceeds signed 64-bit range"
+        throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
       return .int (.literal value)
-    | none => throw s!"unsupported integer literal '{text}'"
+    | none => throw (diagnosticAt span s!"unsupported integer literal '{text}'")
   | .identifier name => do
     let some index := locals.findIdx? (· == name.text)
-      | throw s!"unknown identifier '{name.text}'"
+      | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
     return .int (.argument index)
-  | .call callee arguments _ => do
+  | .call callee arguments span => do
     let some signature := findSignature? all callee.text
-      | throw s!"unknown function '{callee.text}'"
+      | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
     unless signature.returnsInt do
-      throw s!"function '{callee.text}' does not return a value"
+      throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
     if arguments.size != signature.parameters.size then
-      throw s!"function '{callee.text}' expects {signature.parameters.size} arguments"
+      throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
     let mut lowered := #[]
     for argument in arguments do
       let .int value ← lowerScalar all locals argument
-        | throw "function arguments must be int"
+        | throw (diagnosticAt argument.span "function arguments must be int")
       lowered := lowered.push value
     return .int (.call callee.text lowered)
-  | .binary op left right _ => do
+  | .binary op left right span => do
     let left ← lowerScalar all locals left
     let right ← lowerScalar all locals right
     let (.int left, .int right) := (left, right)
-      | throw "binary operands must be int"
+      | throw (diagnosticAt span "binary operands must be int")
     match op with
     | .add => return .int (.add left right)
     | .subtract => return .int (.subtract left right)
     | .less => return .bool (.less left right)
-  | .stringLiteral _ _ => throw "expected int expression"
+  | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
 
 mutual
   private partial def lowerStatement (all : Array Signature) (signature : Signature) :
-      Syntax.Stmt → Except String IR.Instruction
-    | .expr (.call callee arguments _) => do
+      Syntax.Stmt → Except Diagnostic IR.Instruction
+    | .expr (.call callee arguments span) => do
       if callee.text != "println" then
-        throw "only println calls may be used as statements"
+        throw (diagnosticAt callee.span "only println calls may be used as statements")
       let some argument := arguments[0]?
-        | throw "println expects one argument"
-      if arguments.size != 1 then throw "println expects one argument"
+        | throw (diagnosticAt span "println expects one argument")
+      if arguments.size != 1 then throw (diagnosticAt span "println expects one argument")
       match argument with
-      | .stringLiteral literal _ =>
-        return .printString (← decodeString literal)
+      | .stringLiteral literal span =>
+        return .printString (← decodeString literal span)
       | _ =>
         let .int value ← lowerScalar all signature.parameters argument
-          | throw "println supports only string and int"
+          | throw (diagnosticAt argument.span "println supports only string and int")
         return .printInt value
-    | .expr _ => throw "only function calls may be used as statements"
+    | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
-      unless signature.returnsInt do throw s!"function '{signature.name}' returns no value"
+      unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
       let .int value ← lowerScalar all signature.parameters value
-        | throw "return value must be int"
+        | throw (diagnosticAt value.span "return value must be int")
       return .return value
     | .ifThen condition body => do
       let .bool condition ← lowerScalar all signature.parameters condition
-        | throw "if condition must be bool"
+        | throw (diagnosticAt condition.span "if condition must be bool")
       return .ifThen condition (← lowerStatements all signature body)
 
   private partial def lowerStatements (all : Array Signature) (signature : Signature)
-      (statements : Array Syntax.Stmt) : Except String (Array IR.Instruction) := do
+      (statements : Array Syntax.Stmt) : Except Diagnostic (Array IR.Instruction) := do
     let mut result := #[]
     for statement in statements do
       result := result.push (← lowerStatement all signature statement)
     return result
 end
 
-def lower (file : Syntax.File) : Except String IR.Program := do
-  if file.packageName.text != "main" then throw "expected package main"
+def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
+  if file.packageName.text != "main" then throw (diagnosticAt file.packageName.span "expected package main")
   let all ← signatures file
-  let some main := findSignature? all "main" | throw "expected main function"
+  let some main := findSignature? all "main" | throw ⟨.lowering, none, "expected main function"⟩
   unless main.parameters.isEmpty && !main.returnsInt do
-    throw "main must have no parameters or return value"
+    throw ⟨.lowering, (file.functions.find? (·.name.text == "main")).map (·.span),
+      "main must have no parameters or return value"⟩
   let mut functions := #[]
   for function in file.functions do
     let some signature := findSignature? all function.name.text
-      | throw "internal error: missing function signature"
+      | throw (diagnosticAt function.name.span "internal error: missing function signature")
     if signature.name != "main" && !signature.returnsInt then
-      throw s!"function '{signature.name}' must return int"
+      throw (diagnosticAt function.name.span s!"function '{signature.name}' must return int")
     let body ← lowerStatements all signature function.body
     if signature.returnsInt then
       match body[body.size - 1]? with
       | some (.return _) => pure ()
-      | _ => throw s!"function '{signature.name}' must end with return"
+      | _ => throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
     functions := functions.push ⟨signature.name, signature.parameters, body⟩
   return ⟨functions⟩
 

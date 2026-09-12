@@ -7,12 +7,12 @@ private def compileFile (input output backend : String) : IO Unit := do
   let (generated, compiler, language, options) ← match backend with
     | "c" => match compileToC source with
       | .ok c => pure (c, "cc", "c", #["-O2", "-std=c11"])
-      | .error message => throw (IO.userError message)
+      | .error diagnostic => throw (IO.userError (diagnostic.render source))
     -- The Lean toolchain Clang on macOS cannot locate the host SDK during linking.
     | "llvm" => match compileToLLVM source with
       | .ok llvm => pure (llvm, if System.Platform.isOSX then "/usr/bin/clang" else "clang",
           "ir", #["-O2", "-Wno-override-module"])
-      | .error message => throw (IO.userError message)
+      | .error diagnostic => throw (IO.userError (diagnostic.render source))
     | _ => throw (IO.userError s!"unknown backend '{backend}'")
   IO.FS.withTempFile fun handle path => do
     handle.putStr generated

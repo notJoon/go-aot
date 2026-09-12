@@ -16,13 +16,13 @@ private def checkSemis (text : String) (tokens : Array Token) (positions : Array
     s!"wrong semicolons: {text}: {repr result}"
 
 
-private def kinds (text : String) : Except String (Array (TokenKind × Nat × Nat)) := do
+private def kinds (text : String) : Except Diagnostic (Array (TokenKind × Nat × Nat)) := do
   let result ← lex (Source.ofString text)
   return result.map fun t => (t.kind, t.span.start, t.span.stop)
 
 private def checkLex (text : String) (expected : Array (TokenKind × Nat × Nat)) : IO Unit := do
   match kinds text with
-  | .error e => throw (IO.userError s!"lex failed: {text}: {e}")
+  | .error e => throw (IO.userError s!"lex failed: {text}: {e.render (Source.ofString text)}")
   | .ok got => check (got == expected) s!"wrong tokens for {text}: {repr got}"
 
 private def checkLexFails (text : String) : IO Unit :=
@@ -131,7 +131,9 @@ private def lexMain : IO Unit := do
   checkLexFails "0b2"
   checkLexFails "0B2"
   match lex (Source.ofString "0o8") with
-  | .error message => check (message == "1:3: expected octal digit") s!"leaked parser error: {message}"
+  | .error diagnostic =>
+    let message := diagnostic.render (Source.ofString "0o8")
+    check (message == "1:3: expected octal digit") s!"leaked parser error: {message}"
   | .ok _ => throw (IO.userError "accepted invalid octal literal")
   checkLexFails "1_"
   checkLexFails "0x1.5"
@@ -156,7 +158,9 @@ private def lexMain : IO Unit := do
     checkLexFails text
   -- Assert the failure position too: accepting '.' as an operator loses this error.
   match lex (Source.ofString ".5e+") with
-  | .error message => check (message.startsWith "1:5:") s!"lost exponent error: {message}"
+  | .error diagnostic =>
+    let message := diagnostic.render (Source.ofString ".5e+")
+    check (message.startsWith "1:5:") s!"lost exponent error: {message}"
   | .ok _ => throw (IO.userError "accepted missing exponent")
   IO.println "Go lexer: OK"
 

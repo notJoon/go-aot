@@ -18,7 +18,7 @@ private def renderFile (file : Syntax.File) : String := Id.run do
 private def renderParse (text : String) : String :=
   match parse (Source.ofString text) with
   | .ok file => renderFile file
-  | .error message => "error " ++ message ++ "\n"
+  | .error diagnostic => "error " ++ diagnostic.render (Source.ofString text) ++ "\n"
 
 private def checkGolden (name : String) : IO Unit := do
   let path := "Tests/Golden/" ++ name
@@ -42,7 +42,8 @@ private def checkCompileGolden (name : String) : IO Unit := do
       discard <| IO.Process.run { cmd := "cc", args := #[cPath.toString, "-o", exePath.toString] }
       let output ← IO.Process.run { cmd := exePath.toString }
       check (output == expectedOutput) s!"wrong native output: {repr output}"
-  | .error message => throw (IO.userError s!"compile failed: {name}: {message}")
+  | .error diagnostic =>
+    throw (IO.userError s!"compile failed: {name}: {diagnostic.render (Source.ofString input)}")
 
 -- The Lean toolchain Clang on macOS cannot locate the host SDK during linking.
 private def clangCommand : String :=
@@ -88,11 +89,12 @@ private def checkLLVM (name : String) (golden : Bool := false) : IO Unit := do
         let optimized ← IO.FS.readFile optimizedPath
         check (optimized.contains "target datalayout") "optimized LLVM IR has no data layout"
         check (optimized.contains "target triple") "optimized LLVM IR has no target triple"
-  | .error message => throw (IO.userError s!"LLVM compile failed: {name}: {message}")
+  | .error diagnostic =>
+    throw (IO.userError s!"LLVM compile failed: {name}: {diagnostic.render (Source.ofString input)}")
 
 private def checkSameRejection (source : String) : IO Unit :=
   match compileToC (Source.ofString source), compileToLLVM (Source.ofString source) with
-  | .error c, .error llvm => check (c == llvm) s!"backend errors differ: {c} / {llvm}"
+  | .error c, .error llvm => check (c == llvm) s!"backend errors differ: {repr c} / {repr llvm}"
   | _, _ => throw (IO.userError "C and LLVM did not reject the same invalid source")
 
 -- Compare runtime behavior directly because IR goldens only protect emitter formatting.
@@ -158,15 +160,15 @@ def goldenMain : IO Unit := do
   checkSameRejection "package main\nfunc f(n int) int { return n }\nfunc main() { println(f()) }\n"
   checkSameRejection "package main\nfunc main() { println(9223372036854775808) }\n"
   for (source, expected) in [
-      ("package main\nfunc main() { println(1 < 2) }\n", "println supports only string and int"),
-      ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "return value must be int"),
-      ("package main\nfunc main() { if 1 { println(2) } }\n", "if condition must be bool"),
+      ("package main\nfunc main() { println(1 < 2) }\n", "2:23: println supports only string and int"),
+      ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "2:23: return value must be int"),
+      ("package main\nfunc main() { if 1 { println(2) } }\n", "2:18: if condition must be bool"),
       ("package main\nfunc f(n int) int { return n }\nfunc main() { println(f(1 < 2)) }\n",
-        "function arguments must be int"),
-      ("package main\nfunc main() { println(missing) }\n", "unknown identifier 'missing'")] do
+        "3:25: function arguments must be int"),
+      ("package main\nfunc main() { println(missing) }\n", "2:23: unknown identifier 'missing'")] do
     checkSameRejection source
     check (match compileToC (Source.ofString source) with
-      | .error message => message == expected
+      | .error diagnostic => diagnostic.render (Source.ofString source) == expected
       | .ok _ => false)
       s!"wrong lowering error: {source}"
   IO.println "Go parser and AOT tests: OK"

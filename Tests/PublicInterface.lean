@@ -2,8 +2,10 @@ module
 
 import GoAot
 
-example : GoAot.Source → Except String String := GoAot.compileToC
-example : GoAot.Source → Except String String := GoAot.compileToLLVM
+example : GoAot.Source → Except GoAot.Diagnostic String := GoAot.compileToC
+example : GoAot.Source → Except GoAot.Diagnostic String := GoAot.compileToLLVM
+example : GoAot.Diagnostic → GoAot.Phase := (·.phase)
+example : GoAot.Diagnostic → GoAot.Source → String := GoAot.Diagnostic.render
 
 #check_failure GoAot.lex
 #check_failure GoAot.parse

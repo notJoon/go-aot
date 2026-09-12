@@ -1,6 +1,6 @@
 module
 
-public import Compiler.Source
+public import Compiler.Diagnostic
 public import Compiler.Parser.Parser
 public import Compiler.Parser.String
 import Compiler.Unicode
@@ -41,7 +41,7 @@ Keep raw string spans intact, including their internal newlines.
 This implements lexical insertion only. Omission before `)` and `}` belongs to the grammar parser.
 -/
 -- Internal test seam for raw token validation; compiler callers use lex.
-def Lexer.Internal.insertSemicolons (source : Source) (tokens : Array Token) : Except String (Array Token) := do
+def Lexer.Internal.insertSemicolons (source : Source) (tokens : Array Token) : Except Diagnostic (Array Token) := do
   let sourceSize := source.text.utf8ByteSize
   let mut result := Array.emptyWithCapacity tokens.size
   let mut stop := 0
@@ -49,7 +49,8 @@ def Lexer.Internal.insertSemicolons (source : Source) (tokens : Array Token) : E
   for token in tokens do
     if token.span.start < stop || token.span.stop <= token.span.start ||
         token.span.stop > sourceSize || token.inserted then
-      throw "expected ordered, nonempty source token spans within the source"
+      throw ⟨.lexer, some token.span,
+        "expected ordered, nonempty source token spans within the source"⟩
     if insertSemi then
       if let some nl := source.firstNewline? stop token.span.start then
         result := result.push ⟨.semicolon, ⟨nl, nl⟩, true⟩
@@ -659,14 +660,12 @@ def tokens : P (Array Token) := do
 end Lex
 
 /-- Lex Go source into significant tokens with automatic semicolon insertion applied. -/
-def lex (source : Source) : Except String (Array Token) := do
+def lex (source : Source) : Except Diagnostic (Array Token) := do
   let raw ← match Lex.tokens ⟨source.text, source.text.startPos⟩ with
     | .ok _ result => .ok result
     | .err it e =>
       let off := it.2.offset.byteIdx
-      match source.position? off with
-      | some p => .error s!"{p.line}:{p.column}: {e}"
-      | none => .error s!"offset {off}: {e}"
+      .error ⟨.lexer, some ⟨off, off⟩, toString e⟩
   Lexer.Internal.insertSemicolons source raw
 
 end GoAot
