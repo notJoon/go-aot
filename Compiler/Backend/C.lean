@@ -81,19 +81,23 @@ private def emitInstructions (parameters : Array String)
         next := after
     return (result, next)
 
-private def emitTerminator (parameters : Array String) (nextTemp : Nat) :
+private def emitTerminator (function : IR.Function) (nextTemp : Nat) :
     IR.Terminator → String × Nat
   | .br target => (s!"    goto bb{target};\n", nextTemp)
   | .condBr condition ifTrue ifFalse =>
-    let (code, value, next) := emitBoolExpr parameters "    " nextTemp condition
+    let (code, value, next) := emitBoolExpr function.parameters "    " nextTemp condition
     (code ++ s!"    if ({value}) goto bb{ifTrue}; else goto bb{ifFalse};\n", next)
-  | .ret none => ("    return 0;\n", nextTemp)
+  | .ret none =>
+    ((if function.returnKind == .void && function.name != "main" then "    return;\n"
+      else "    return 0;\n"), nextTemp)
   | .ret (some expression) =>
-    let (code, value, next) := emitExpr parameters "    " nextTemp expression
+    let (code, value, next) := emitExpr function.parameters "    " nextTemp expression
     (code ++ s!"    return {value};\n", next)
 
 private def emitHeader (function : IR.Function) : String :=
-  let result := if function.name == "main" then "int" else "int64_t"
+  let result := match function.returnKind with
+    | .int => "int64_t"
+    | .void => if function.name == "main" then "int" else "void"
   result ++ " " ++ cName function.name ++ "(" ++ emitParameters function.parameters ++ ")"
 
 def emit (program : IR.Program) : String := Id.run do
@@ -112,7 +116,7 @@ def emit (program : IR.Program) : String := Id.run do
     for h : index in [:function.blocks.size] do
       let block := function.blocks[index]
       let (body, after) := emitInstructions function.parameters block.instructions "    " next
-      let (terminator, after) := emitTerminator function.parameters after block.terminator
+      let (terminator, after) := emitTerminator function after block.terminator
       output := output ++ s!"  bb{index}: " ++ "{\n" ++ body ++ terminator ++ "  }\n"
       next := after
     output := output ++ "}\n"

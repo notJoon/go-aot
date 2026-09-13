@@ -111,6 +111,18 @@ private def verifyContracts : IO Unit := do
       terminatorError.render == "internal error: invalid IR in function 'main', block 0, terminator: branch to entry block is not allowed" do
     throw (IO.userError "incorrect terminator error location")
 
+private def checkReturnKinds : IO Unit := do
+  -- Exercise the backend field contract before source syntax permits non-main void functions.
+  let program : IR.Program := ⟨#[mainFunction,
+    { mainFunction with name := "f" }]⟩
+  let c := Backend.C.emit program
+  let llvm := Backend.LLVM.emit program
+  unless c.contains "int main(void)" && c.contains "return 0;" &&
+      c.contains "static void go_f(void)" && c.contains "return;" &&
+      llvm.contains "define i32 @main()" && llvm.contains "ret i32 0" &&
+      llvm.contains "define internal void @go_f()" && llvm.contains "ret void" do
+    throw (IO.userError "backends ignored return kinds or changed the main ABI")
+
 private def checkLLVMRuntimeNeeds : IO Unit := do
   let program : IR.Program := ⟨#[
     { mainFunction with blocks := #[
@@ -133,6 +145,7 @@ private def checkLLVMRuntimeNeeds : IO Unit := do
 
 def irMain : IO Unit := do
   verifyContracts
+  checkReturnKinds
   checkLLVMRuntimeNeeds
   let source := Source.ofString
     "package main\nfunc f(z int, a int) int { return a - z }\nfunc main() { println(f(1, 2)) }\n"

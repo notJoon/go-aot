@@ -86,30 +86,36 @@ private def emitInstructions (strings : Array ByteArray)
       value := next
   return (output, value)
 
-private def emitTerminator (output : Array String) (nextValue : Nat) :
+private def resultType (function : IR.Function) : String :=
+  match function.returnKind with
+  | .int => "i64"
+  | .void => if function.name == "main" then "i32" else "void"
+
+private def emitTerminator (function : IR.Function) (output : Array String) (nextValue : Nat) :
     IR.Terminator → Array String × Nat
   | .br target => (output.push s!"  br label %bb{target}\n", nextValue)
   | .condBr condition ifTrue ifFalse =>
     let (output, value, next) := emitBoolExpr output nextValue condition
     (output.push s!"  br i1 {value}, label %bb{ifTrue}, label %bb{ifFalse}\n", next)
-  | .ret none => (output.push "  ret i32 0\n", nextValue)
+  | .ret none =>
+    (output.push (if function.returnKind == .void && function.name != "main" then "  ret void\n"
+      else s!"  ret {resultType function} 0\n"), nextValue)
   | .ret (some expression) =>
     let (output, value, next) := emitExpr output nextValue expression
-    (output.push s!"  ret i64 {value}\n", next)
+    (output.push s!"  ret {resultType function} {value}\n", next)
 
 private def emitFunction (strings : Array ByteArray) (output : Array String)
     (function : IR.Function) : Array String := Id.run do
   let parameters := function.parameters.mapIdx fun index _ => s!"i64 %arg{index}"
   let linkage := if function.name == "main" then "" else "internal "
-  let resultType := if function.name == "main" then "i32" else "i64"
-  let mut output := output.push (s!"define {linkage}{resultType} @{llvmName function.name}(" ++
+  let mut output := output.push (s!"define {linkage}{resultType function} @{llvmName function.name}(" ++
     String.intercalate ", " parameters.toList ++ ") {\n")
   let mut next := 0
   for h : index in [:function.blocks.size] do
     let block := function.blocks[index]
     output := output.push ((if index == 0 then "" else "\n") ++ s!"bb{index}:\n")
     let (body, after) := emitInstructions strings block.instructions output next
-    let (terminated, after) := emitTerminator body after block.terminator
+    let (terminated, after) := emitTerminator function body after block.terminator
     output := terminated
     next := after
   return output.push "}\n"
