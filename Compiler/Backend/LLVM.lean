@@ -10,15 +10,17 @@ private def llvmName (name : String) : String :=
   if name == "main" then name else "go_" ++ name
 
 -- Collect declarations and deduplicate string globals before any function is emitted.
-private def collectRuntimeNeeds (instructions : Array IR.Instruction) :
+private def collectRuntimeNeeds (program : IR.Program) :
     Array ByteArray × Bool := Id.run do
   let mut result := #[]
   let mut needsIntFormat := false
-  for instruction in instructions do
-    match instruction with
-    | .printString bytes =>
-      unless result.contains bytes do result := result.push bytes
-    | .printInt _ => needsIntFormat := true
+  for function in program.functions do
+    for block in function.blocks do
+      for instruction in block.instructions do
+        match instruction with
+        | .printString bytes =>
+          unless result.contains bytes do result := result.push bytes
+        | .printInt _ => needsIntFormat := true
   return (result, needsIntFormat)
 
 private def hexDigit : Nat → String
@@ -113,14 +115,7 @@ private def emitFunction (strings : Array ByteArray) (output : Array String)
   return output.push "}\n"
 
 def emit (program : IR.Program) : String := Id.run do
-  let mut strings := #[]
-  let mut needsIntFormat := false
-  for function in program.functions do
-    for block in function.blocks do
-      let (foundStrings, foundNeedsIntFormat) := collectRuntimeNeeds block.instructions
-      for bytes in foundStrings do
-        unless strings.contains bytes do strings := strings.push bytes
-      needsIntFormat := needsIntFormat || foundNeedsIntFormat
+  let (strings, needsIntFormat) := collectRuntimeNeeds program
 
   let mut output : Array String := #[]
   for i in [:strings.size] do

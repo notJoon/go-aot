@@ -111,8 +111,29 @@ private def verifyContracts : IO Unit := do
       terminatorError.render == "internal error: invalid IR in function 'main', block 0, terminator: branch to entry block is not allowed" do
     throw (IO.userError "incorrect terminator error location")
 
+private def checkLLVMRuntimeNeeds : IO Unit := do
+  let program : IR.Program := ⟨#[
+    { mainFunction with blocks := #[
+      ⟨#[.printString "first".toUTF8], .br 1⟩,
+      ⟨#[.printString "second".toUTF8, .printString "first".toUTF8], .ret none⟩] },
+    { intFunction with blocks := #[
+      ⟨#[.printString "second".toUTF8, .printInt (.argument 0)],
+        .ret (some (.argument 0))⟩] }]⟩
+  verifyAccepted program
+  let output := Backend.LLVM.emit program
+  unless output.contains "@.str.0 = private unnamed_addr constant [6 x i8] c\"first\\00\"" &&
+      output.contains "@.str.1 = private unnamed_addr constant [7 x i8] c\"second\\00\"" &&
+      !output.contains "@.str.2" do
+    throw (IO.userError "LLVM string globals lost first-use order or deduplication")
+  for index in [0, 1] do
+    unless (output.splitOn s!"call void @goaot.print_line(ptr @.str.{index},").length == 3 do
+      throw (IO.userError "LLVM string references differ across blocks or functions")
+  unless output.contains "@.int_format =" && output.contains "declare i32 @printf(ptr, ...)" do
+    throw (IO.userError "LLVM missed integer runtime needs in a later function")
+
 def irMain : IO Unit := do
   verifyContracts
+  checkLLVMRuntimeNeeds
   let source := Source.ofString
     "package main\nfunc f(z int, a int) int { return a - z }\nfunc main() { println(f(1, 2)) }\n"
   let .ok file := parse source | throw (IO.userError "IR fixture did not parse")
