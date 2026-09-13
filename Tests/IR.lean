@@ -121,3 +121,11 @@ def irMain : IO Unit := do
   match program.functions[0]?.map (·.blocks) with
   | some #[⟨#[], .ret (some (.subtract (.argument 1) (.argument 0)))⟩] => pure ()
   | _ => throw (IO.userError "lowering did not resolve parameter positions")
+  let source := Source.ofString
+    "package main\nfunc f() int { return 1; println(\"dead\"); if 1 < 2 { println(3) }; return 2 }\nfunc main() {}"
+  let .ok file := parse source | throw (IO.userError "dead-source fixture did not parse")
+  let .ok program := Lowering.lower file | throw (IO.userError "dead-source fixture did not lower")
+  verifyAccepted program
+  match program.functions[0]?.map (·.blocks) with
+  | some #[⟨#[], .ret (some (.literal 1))⟩] => pure ()
+  | _ => throw (IO.userError "dead source emitted blocks or instructions")

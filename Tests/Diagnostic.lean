@@ -46,6 +46,27 @@ def diagnosticMain : IO Unit := do
   check ((source.slice? expected.span?.get!).map (·.copy) == some "missing")
     "diagnostic span does not cover the identifier"
 
+  for (before, after, token, message) in [
+      ("package main\nfunc f() int { return 1; println(", "); return 2 }\nfunc main() {}",
+        "missing", "unknown identifier 'missing'"),
+      ("package main\nfunc f() int { return 1; if 0 < 1 { println(", ") }; return 2 }\nfunc main() {}",
+        "missing", "unknown identifier 'missing'"),
+      ("package main\nfunc f() int { return 1; if ", " {} ; return 2 }\nfunc main() {}",
+        "1", "if condition must be bool")] do
+    let source := Source.ofString (before ++ token ++ after)
+    let expected : Diagnostic := ⟨.lowering,
+      some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
+    checkError (compileToC source) expected
+    checkError (compileToLLVM source) expected
+  let source := Source.ofString
+    "package main\nfunc f() int { return 1; println(2) }\nfunc main() {}"
+  for result in [compileToC source, compileToLLVM source] do
+    match result with
+    | .error diagnostic =>
+      check (diagnostic.phase == .lowering && diagnostic.message == "function 'f' must end with return")
+        "source return rule changed"
+    | .ok _ => throw (IO.userError "accepted int function without final source return")
+
   let outOfBounds : Diagnostic := ⟨.lexer, some ⟨5, 5⟩, "invalid span"⟩
   check (outOfBounds.render (Source.ofString "") == "offset 5: invalid span")
     "missing out-of-bounds fallback"
