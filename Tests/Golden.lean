@@ -27,6 +27,13 @@ private def checkGolden (name : String) : IO Unit := do
   let actual := renderParse input
   check (actual == expected) s!"golden mismatch: {name}\nexpected:\n{expected}actual:\n{actual}"
 
+private def ccCommand : IO String :=
+  return (← IO.getEnv "CC").getD "cc"
+
+-- The Lean toolchain Clang on macOS cannot locate the host SDK during linking.
+private def clangCommand : IO String :=
+  return (← IO.getEnv "CLANG").getD (if System.Platform.isOSX then "/usr/bin/clang" else "clang")
+
 private def checkCompileGolden (name : String) : IO Unit := do
   let path := "Tests/Golden/" ++ name
   let input ← IO.FS.readFile (path ++ ".go")
@@ -39,15 +46,11 @@ private def checkCompileGolden (name : String) : IO Unit := do
       let cPath := dir / "program.c"
       let exePath := dir / "program"
       IO.FS.writeFile cPath actual
-      discard <| IO.Process.run { cmd := "cc", args := #[cPath.toString, "-o", exePath.toString] }
+      discard <| IO.Process.run { cmd := ← ccCommand, args := #[cPath.toString, "-o", exePath.toString] }
       let output ← IO.Process.run { cmd := exePath.toString }
       check (output == expectedOutput) s!"wrong native output: {repr output}"
   | .error diagnostic =>
     throw (IO.userError s!"compile failed: {name}: {diagnostic.render (Source.ofString input)}")
-
--- The Lean toolchain Clang on macOS cannot locate the host SDK during linking.
-private def clangCommand : String :=
-  if System.Platform.isOSX then "/usr/bin/clang" else "clang"
 
 -- Verify input SSA and every transformed module before code generation.
 private def llvmOptions : Array String :=
@@ -79,13 +82,13 @@ private def checkLLVM (name : String) (golden : Bool := false) : IO Unit := do
       let exePath := dir / "program"
       IO.FS.writeFile llvmPath actual
       let compileArgs := llvmOptions ++ #["-x", "ir", llvmPath.toString, "-o", exePath.toString]
-      discard <| IO.Process.run { cmd := clangCommand, args := compileArgs }
+      discard <| IO.Process.run { cmd := ← clangCommand, args := compileArgs }
       let output ← IO.Process.run { cmd := exePath.toString }
       check (output == expectedOutput) s!"wrong LLVM output: {name}: {repr output}"
       if name == "hello" then
         let optimizeArgs := llvmOptions ++ #["-S", "-emit-llvm", "-x", "ir", llvmPath.toString,
           "-o", optimizedPath.toString]
-        discard <| IO.Process.run { cmd := clangCommand, args := optimizeArgs }
+        discard <| IO.Process.run { cmd := ← clangCommand, args := optimizeArgs }
         let optimized ← IO.FS.readFile optimizedPath
         check (optimized.contains "target datalayout") "optimized LLVM IR has no data layout"
         check (optimized.contains "target triple") "optimized LLVM IR has no target triple"
@@ -104,8 +107,8 @@ private def checkDifferential (name : String) : IO Unit := do
   let expected ← IO.FS.readFile (path ++ ".out.golden")
   let .ok c := compileToC source | throw (IO.userError s!"C rejected {name}")
   let .ok llvm := compileToLLVM source | throw (IO.userError s!"LLVM rejected {name}")
-  let cOutput ← runGenerated "cc" "c" #["-O2", "-std=c11"] c
-  let llvmOutput ← runGenerated clangCommand "ir" llvmOptions llvm
+  let cOutput ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11"] c
+  let llvmOutput ← runGenerated (← clangCommand) "ir" llvmOptions llvm
   check (cOutput.exitCode == llvmOutput.exitCode) s!"backend exit codes differ: {name}"
   check (cOutput.stdout == llvmOutput.stdout) s!"backend stdout differs: {name}"
   check (llvmOutput.exitCode == 0 && llvmOutput.stdout == expected) s!"wrong output: {name}"
@@ -117,8 +120,8 @@ private def checkNulString : IO Unit := do
     | throw (IO.userError "C rejected the NUL string regression fixture")
   let .ok llvm := compileToLLVM (Source.ofString input)
     | throw (IO.userError "LLVM rejected the NUL string regression fixture")
-  let cOutput ← runGenerated "cc" "c" #["-O2", "-std=c11"] c
-  let llvmOutput ← runGenerated clangCommand "ir" llvmOptions llvm
+  let cOutput ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11"] c
+  let llvmOutput ← runGenerated (← clangCommand) "ir" llvmOptions llvm
   let expected := ByteArray.mk #[97, 0, 98, 10]
   check (cOutput.exitCode == 0 && cOutput.stdout.toUTF8 == expected) "C changed NUL bytes"
   check (llvmOutput.exitCode == 0 && llvmOutput.stdout.toUTF8 == expected) "LLVM changed NUL bytes"
@@ -129,7 +132,7 @@ private def checkInvalidSSARejected : IO Unit := do
     let objectPath := dir / "invalid.o"
     IO.FS.writeFile llvmPath (← IO.FS.readFile "Tests/Golden/invalid_ssa.ll")
     let result ← IO.Process.output {
-      cmd := clangCommand
+      cmd := ← clangCommand
       args := llvmOptions ++ #["-x", "ir", "-c", llvmPath.toString, "-o", objectPath.toString]
     }
     check (result.exitCode != 0) "LLVM verifier accepted invalid SSA"
