@@ -69,8 +69,6 @@ structure TokenIterator where
 
 instance : Parser.Iterator TokenIterator Token Nat where
   pos it := it.idx
-  next it := { it with idx := it.idx + 1 }
-  cur it := it.tokens[it.idx]!
   hasNext it := it.idx < it.tokens.size
   next' it _ := { it with idx := it.idx + 1 }
   cur' it h := it.tokens[it.idx]'(by simpa using h)

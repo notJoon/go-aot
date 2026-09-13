@@ -28,8 +28,6 @@ namespace Parser
 
 class Iterator (ι : Type) (elem : outParam Type) (idx : outParam Type) [DecidableEq idx] [DecidableEq elem] where
   pos : ι -> idx
-  next : ι -> ι
-  cur: ι -> elem
   hasNext : ι -> Bool
   next' (i : ι) : (hasNext i) -> ι
   cur' (i : ι) : (hasNext i) -> elem
@@ -123,11 +121,6 @@ def many (p : Parse ι α) : Parse ι (Array α) :=
   manyCore p #[]
 
 @[inline]
-def many1 (p : Parse ι α) : Parse ι (Array α) := do
-  let x <- p
-  manyCore p #[x]
-
-@[inline]
 def any : Parse ι elem := fun it =>
   if h : Iterator.hasNext it then
     let c := Iterator.cur' it h
@@ -142,27 +135,11 @@ def satisfy (pred : elem -> Bool) : Parse ι elem := attempt do
   if pred c then return c else fail "satisfy: predicate not satisfied"
 
 @[inline]
-def notFollowedBy (p : Parse ι α) : Parse ι Unit := fun it =>
-  match p it with
-  | .ok _ _ => .err it (.other "notFollowedBy: unexpected success")
-  | .err _ _ => .ok it ()
-
-@[inline]
 def peek? : Parse ι (Option elem) := fun it =>
   if h : Iterator.hasNext it then
     .ok it (some <| Iterator.cur' it h)
   else
     .ok it none
-
-@[inline]
-def peekWhen? (p : elem -> Bool) : Parse ι (Option elem) := do
-  let some data <- peek?
-    | return none
-
-  if p data then
-    return some data
-  else
-    return none
 
 @[inline]
 def peek! : Parse ι elem := fun it =>
@@ -172,32 +149,10 @@ def peek! : Parse ι elem := fun it =>
     .err it .eof
 
 @[inline]
-def peekD (default : elem) : Parse ι elem := fun it =>
-  if h : Iterator.hasNext it then
-    .ok it (Iterator.cur' it h)
-  else
-    .ok it default
-
-@[inline]
 def skip : Parse ι Unit := fun it =>
   if h : Iterator.hasNext it then
     .ok (Iterator.next' it h) ()
   else
     .err it (.other "skip: expected element to skip")
-
-@[specialize]
-partial def manyCharsCore (p : Parse ι Char) (acc : String) : Parse ι String :=
-  tryCatch p
-    (fun x => manyCharsCore p (acc.push x))
-    (fun _ => pure acc)
-
-@[inline]
-def manyChars (p : Parse ι Char) : Parse ι String := do
-  manyCharsCore p ""
-
-@[inline]
-def manyChars1 (p : Parse ι Char) : Parse ι String := do
-  let x ← p
-  manyCharsCore p x.toString
 
 end Parser
