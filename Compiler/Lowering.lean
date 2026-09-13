@@ -19,29 +19,18 @@ private structure Signature where
   parameters : Array String
   returnsInt : Bool
 
-private def asciiLetter (c : Char) : Bool :=
-  ('a' ≤ c && c ≤ 'z') || ('A' ≤ c && c ≤ 'Z')
-
-private def asciiDigit (c : Char) : Bool := '0' ≤ c && c ≤ '9'
-
-private def validName (name : String) : Bool :=
-  match name.toList with
-  | [] => false
-  | first :: rest => (asciiLetter first || first == '_') &&
-      rest.all fun c => asciiLetter c || asciiDigit c || c == '_'
-
 private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature) := do
   let mut result := #[]
   for function in file.functions do
     let name := function.name.text
-    unless validName name do throw (diagnosticAt function.name.span s!"unsupported function name '{name}'")
+    unless IR.validName name do throw (diagnosticAt function.name.span s!"unsupported function name '{name}'")
     if result.any (fun (signature : Signature) => signature.name == name) then
       throw (diagnosticAt function.name.span s!"duplicate function '{name}'")
     let mut parameters := #[]
     for parameter in function.parameters do
       if parameter.typeName.text != "int" then
         throw (diagnosticAt parameter.typeName.span s!"only int parameters are supported in function '{name}'")
-      unless validName parameter.name.text do
+      unless IR.validName parameter.name.text do
         throw (diagnosticAt parameter.name.span s!"unsupported parameter name '{parameter.name.text}'")
       if parameters.contains parameter.name.text then
         throw (diagnosticAt parameter.name.span s!"duplicate parameter '{parameter.name.text}'")
@@ -150,39 +139,90 @@ private partial def lowerScalar (all : Array Signature) (locals : Array String) 
     | .less => return .bool (.less left right)
   | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
 
+private structure PendingBlock where
+  instructions : Array IR.Instruction := #[]
+  terminator : Option IR.Terminator := none
+
+private structure Builder where
+  blocks : Array PendingBlock := #[{}]
+  current : Option IR.BlockId := some 0
+
+private def builderError : Diagnostic :=
+  ⟨.lowering, none, "internal error: invalid CFG builder state"⟩
+
+private def Builder.newBlock (builder : Builder) : IR.BlockId × Builder :=
+  (builder.blocks.size, { builder with blocks := builder.blocks.push {} })
+
+private def Builder.emit (builder : Builder) (instruction : IR.Instruction) :
+    Except Diagnostic Builder := do
+  let some current := builder.current | throw builderError
+  let some block := builder.blocks[current]? | throw builderError
+  if block.terminator.isSome then throw builderError
+  let blocks := builder.blocks.set! current { block with instructions := block.instructions.push instruction }
+  return { builder with blocks }
+
+private def Builder.terminate (builder : Builder) (terminator : IR.Terminator) :
+    Except Diagnostic Builder := do
+  let some current := builder.current | throw builderError
+  let some block := builder.blocks[current]? | throw builderError
+  if block.terminator.isSome then throw builderError
+  return { blocks := builder.blocks.set! current ({ block with terminator := some terminator })
+           current := none }
+
+private def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
+    Except Diagnostic Builder := do
+  let some block := builder.blocks[target]? | throw builderError
+  if builder.current.isSome || block.terminator.isSome then throw builderError
+  return { builder with current := some target }
+
+private def Builder.finish (builder : Builder) : Except Diagnostic (Array IR.Block) := do
+  if builder.current.isSome then throw builderError
+  builder.blocks.mapM fun block => do
+    let some terminator := block.terminator | throw builderError
+    return ⟨block.instructions, terminator⟩
+
 mutual
-  private partial def lowerStatement (all : Array Signature) (signature : Signature) :
-      Syntax.Stmt → Except Diagnostic IR.Instruction
+  private partial def lowerStatement (all : Array Signature) (signature : Signature)
+      (builder : Builder) : Syntax.Stmt → Except Diagnostic Builder
     | .expr (.call callee arguments span) => do
       if callee.text != "println" then
         throw (diagnosticAt callee.span "only println calls may be used as statements")
       let some argument := arguments[0]?
         | throw (diagnosticAt span "println expects one argument")
       if arguments.size != 1 then throw (diagnosticAt span "println expects one argument")
-      match argument with
-      | .stringLiteral literal span =>
-        return .printString (← decodeString literal span)
-      | _ =>
-        let .int value ← lowerScalar all signature.parameters argument
-          | throw (diagnosticAt argument.span "println supports only string and int")
-        return .printInt value
+      let instruction ← match argument with
+        | .stringLiteral literal span =>
+          pure (IR.Instruction.printString (← decodeString literal span))
+        | _ => do
+          let .int value ← lowerScalar all signature.parameters argument
+            | throw (diagnosticAt argument.span "println supports only string and int")
+          pure (.printInt value)
+      if builder.current.isSome then builder.emit instruction else pure builder
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
       let .int value ← lowerScalar all signature.parameters value
         | throw (diagnosticAt value.span "return value must be int")
-      return .return value
+      if builder.current.isSome then builder.terminate (.ret (some value)) else pure builder
     | .ifThen condition body => do
       let .bool condition ← lowerScalar all signature.parameters condition
         | throw (diagnosticAt condition.span "if condition must be bool")
-      return .ifThen condition (← lowerStatements all signature body)
+      -- Closed paths still check source semantics, without reserving unreachable blocks.
+      if builder.current.isNone then return ← lowerStatements all signature builder body
+      let (thenBlock, builder) := builder.newBlock
+      let (continuation, builder) := builder.newBlock
+      let builder ← builder.terminate (.condBr condition thenBlock continuation)
+      let builder ← builder.selectBlock thenBlock
+      let builder ← lowerStatements all signature builder body
+      let builder ← if builder.current.isSome then builder.terminate (.br continuation) else pure builder
+      builder.selectBlock continuation
 
   private partial def lowerStatements (all : Array Signature) (signature : Signature)
-      (statements : Array Syntax.Stmt) : Except Diagnostic (Array IR.Instruction) := do
-    let mut result := #[]
+      (builder : Builder) (statements : Array Syntax.Stmt) : Except Diagnostic Builder := do
+    let mut builder := builder
     for statement in statements do
-      result := result.push (← lowerStatement all signature statement)
-    return result
+      builder ← lowerStatement all signature builder statement
+    return builder
 end
 
 def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
@@ -198,12 +238,17 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
       | throw (diagnosticAt function.name.span "internal error: missing function signature")
     if signature.name != "main" && !signature.returnsInt then
       throw (diagnosticAt function.name.span s!"function '{signature.name}' must return int")
-    let body ← lowerStatements all signature function.body
+    let builder ← lowerStatements all signature {} function.body
     if signature.returnsInt then
-      match body[body.size - 1]? with
+      match function.body[function.body.size - 1]? with
       | some (.return _) => pure ()
       | _ => throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
-    functions := functions.push ⟨signature.name, signature.parameters, body⟩
+    let builder ← if builder.current.isSome then
+        if signature.returnsInt then throw builderError else builder.terminate (.ret none)
+      else pure builder
+    let blocks ← builder.finish
+    functions := functions.push ⟨signature.name, signature.parameters,
+      if signature.returnsInt then .int else .void, blocks⟩
   return ⟨functions⟩
 
 end GoAot.Lowering

@@ -10,7 +10,7 @@ private def llvmName (name : String) : String :=
   if name == "main" then name else "go_" ++ name
 
 -- Collect declarations and deduplicate string globals before any function is emitted.
-private partial def collectRuntimeNeeds (instructions : Array IR.Instruction) :
+private def collectRuntimeNeeds (instructions : Array IR.Instruction) :
     Array ByteArray × Bool := Id.run do
   let mut result := #[]
   let mut needsIntFormat := false
@@ -19,12 +19,6 @@ private partial def collectRuntimeNeeds (instructions : Array IR.Instruction) :
     | .printString bytes =>
       unless result.contains bytes do result := result.push bytes
     | .printInt _ => needsIntFormat := true
-    | .ifThen _ body =>
-      let (strings, nestedNeedsIntFormat) := collectRuntimeNeeds body
-      for bytes in strings do
-        unless result.contains bytes do result := result.push bytes
-      needsIntFormat := needsIntFormat || nestedNeedsIntFormat
-    | _ => pure ()
   return (result, needsIntFormat)
 
 private def hexDigit : Nat → String
@@ -77,62 +71,57 @@ private def emitBoolExpr (nextValue : Nat) : IR.BoolExpr → String × String ×
     (leftCode ++ rightCode ++
       s!"  {result} = icmp slt i64 {leftValue}, {rightValue}\n", result, next + 1)
 
--- The final flag records whether the current block already owns its required terminator.
-private partial def emitInstructions
+private def emitInstructions
     (strings : Array ByteArray) (instructions : Array IR.Instruction)
-    (nextValue nextBlock : Nat) : String × Nat × Nat × Bool := Id.run do
+    (nextValue : Nat) : String × Nat := Id.run do
   let mut output := ""
   let mut value := nextValue
-  let mut block := nextBlock
-  let mut terminated := false
   for instruction in instructions do
-    unless terminated do
-      match instruction with
-      | .printString bytes =>
-        let index := strings.idxOf bytes
-        output := output ++ s!"  call void @goaot.print_line(ptr @.str.{index}, i64 {bytes.size})\n"
-      | .printInt expression =>
-        let (code, result, next) := emitExpr value expression
-        output := output ++ code ++ s!"  call i32 (ptr, ...) @printf(ptr @.int_format, i64 {result})\n"
-        value := next
-      | .return expression =>
-        let (code, result, next) := emitExpr value expression
-        output := output ++ code ++ s!"  ret i64 {result}\n"
-        value := next
-        terminated := true
-      | .ifThen condition body =>
-        let (conditionCode, conditionValue, next) := emitBoolExpr value condition
-        let label := block
-        let (bodyCode, afterValue, afterBlock, bodyTerminated) :=
-          emitInstructions strings body next (block + 1)
-        output := output ++ conditionCode ++
-          s!"  br i1 {conditionValue}, label %if.then.{label}, label %if.end.{label}\n\n" ++
-          s!"if.then.{label}:\n" ++ bodyCode ++
-          (if bodyTerminated then "" else s!"  br label %if.end.{label}\n") ++
-          s!"\nif.end.{label}:\n"
-        value := afterValue
-        block := afterBlock
-  return (output, value, block, terminated)
+    match instruction with
+    | .printString bytes =>
+      let index := strings.idxOf bytes
+      output := output ++ s!"  call void @goaot.print_line(ptr @.str.{index}, i64 {bytes.size})\n"
+    | .printInt expression =>
+      let (code, result, next) := emitExpr value expression
+      output := output ++ code ++ s!"  call i32 (ptr, ...) @printf(ptr @.int_format, i64 {result})\n"
+      value := next
+  return (output, value)
+
+private def emitTerminator (nextValue : Nat) : IR.Terminator → String × Nat
+  | .br target => (s!"  br label %bb{target}\n", nextValue)
+  | .condBr condition ifTrue ifFalse =>
+    let (code, value, next) := emitBoolExpr nextValue condition
+    (code ++ s!"  br i1 {value}, label %bb{ifTrue}, label %bb{ifFalse}\n", next)
+  | .ret none => ("  ret i32 0\n", nextValue)
+  | .ret (some expression) =>
+    let (code, value, next) := emitExpr nextValue expression
+    (code ++ s!"  ret i64 {value}\n", next)
 
 private def emitFunction (strings : Array ByteArray)
     (function : IR.Function) : String := Id.run do
   let parameters := function.parameters.mapIdx fun index _ => s!"i64 %arg{index}"
   let linkage := if function.name == "main" then "" else "internal "
   let resultType := if function.name == "main" then "i32" else "i64"
-  let (body, _, _, _) := emitInstructions strings function.body 0 0
-  return s!"define {linkage}{resultType} @{llvmName function.name}(" ++
-    String.intercalate ", " parameters.toList ++ ") {\nentry:\n" ++ body ++
-    (if function.name == "main" then "  ret i32 0\n" else "") ++ "}\n"
+  let mut output := s!"define {linkage}{resultType} @{llvmName function.name}(" ++
+    String.intercalate ", " parameters.toList ++ ") {\n"
+  let mut next := 0
+  for h : index in [:function.blocks.size] do
+    let block := function.blocks[index]
+    let (body, after) := emitInstructions strings block.instructions next
+    let (terminator, after) := emitTerminator after block.terminator
+    output := output ++ (if index == 0 then "" else "\n") ++ s!"bb{index}:\n" ++ body ++ terminator
+    next := after
+  return output ++ "}\n"
 
--- Like the C backend, consumes programs validated by Lowering.
 def emit (program : IR.Program) : String := Id.run do
   let mut strings := #[]
   let mut needsIntFormat := false
   for function in program.functions do
-    let (foundStrings, foundNeedsIntFormat) := collectRuntimeNeeds function.body
-    for bytes in foundStrings do
-      unless strings.contains bytes do strings := strings.push bytes
-    needsIntFormat := needsIntFormat || foundNeedsIntFormat
+    for block in function.blocks do
+      let (foundStrings, foundNeedsIntFormat) := collectRuntimeNeeds block.instructions
+      for bytes in foundStrings do
+        unless strings.contains bytes do strings := strings.push bytes
+      needsIntFormat := needsIntFormat || foundNeedsIntFormat
 
   let mut output := ""
   for i in [:strings.size] do

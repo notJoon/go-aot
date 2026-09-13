@@ -16,8 +16,11 @@ example : Syntax.File → Except Diagnostic IR.Program := Lowering.lower
 private def intValue : IR.IntExpr := .literal 1
 private def boolValue : IR.BoolExpr := .less intValue intValue
 #check_failure IR.Instruction.printInt boolValue
-#check_failure IR.Instruction.return boolValue
-#check_failure IR.Instruction.ifThen intValue #[]
+#check_failure IR.Instruction.return intValue
+#check_failure IR.Instruction.ifThen boolValue #[]
+#check_failure IR.Terminator.ret (some boolValue)
+#check_failure IR.Terminator.condBr intValue 1 2
+#check_failure (show IR.Block from { instructions := #[] })
 #check_failure IR.IntExpr.call "f" #[boolValue]
 #check_failure IR.BoolExpr.less boolValue intValue
 
@@ -30,6 +33,6 @@ def irMain : IO Unit := do
     "package main\nfunc f(z int, a int) int { return a - z }\nfunc main() { println(f(1, 2)) }\n"
   let .ok file := parse source | throw (IO.userError "IR fixture did not parse")
   let .ok program := Lowering.lower file | throw (IO.userError "IR fixture did not lower")
-  match program.functions[0]?.map (·.body) with
-  | some #[.return (.subtract (.argument 1) (.argument 0))] => pure ()
+  match program.functions[0]?.map (·.blocks) with
+  | some #[⟨#[], .ret (some (.subtract (.argument 1) (.argument 0)))⟩] => pure ()
   | _ => throw (IO.userError "lowering did not resolve parameter positions")

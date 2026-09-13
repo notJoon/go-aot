@@ -64,7 +64,7 @@ private def emitBytes (bytes : ByteArray) : String := Id.run do
   return result
 
 -- Explicit byte counts preserve embedded NUL values during string output.
-private partial def emitInstructions (parameters : Array String)
+private def emitInstructions (parameters : Array String)
     (instructions : Array IR.Instruction) (indent : String)
     (nextTemp : Nat) : String × Nat :=
   Id.run do
@@ -79,18 +79,18 @@ private partial def emitInstructions (parameters : Array String)
         result := result ++ code ++ indent ++
           "printf(\"%lld\\n\", (long long)" ++ value ++ ");\n"
         next := after
-      | .return expression =>
-        let (code, value, after) := emitExpr parameters indent next expression
-        result := result ++ code ++ indent ++ "return " ++ value ++ ";\n"
-        next := after
-      | .ifThen condition body =>
-        let (conditionCode, conditionValue, afterCondition) :=
-          emitBoolExpr parameters indent next condition
-        let (body, afterBody) := emitInstructions parameters body (indent ++ "  ") afterCondition
-        result := result ++ conditionCode ++ indent ++ "if (" ++ conditionValue ++ ") {\n" ++
-          body ++ indent ++ "}\n"
-        next := afterBody
     return (result, next)
+
+private def emitTerminator (parameters : Array String) (nextTemp : Nat) :
+    IR.Terminator → String × Nat
+  | .br target => (s!"    goto bb{target};\n", nextTemp)
+  | .condBr condition ifTrue ifFalse =>
+    let (code, value, next) := emitBoolExpr parameters "    " nextTemp condition
+    (code ++ s!"    if ({value}) goto bb{ifTrue}; else goto bb{ifFalse};\n", next)
+  | .ret none => ("    return 0;\n", nextTemp)
+  | .ret (some expression) =>
+    let (code, value, next) := emitExpr parameters "    " nextTemp expression
+    (code ++ s!"    return {value};\n", next)
 
 private def emitHeader (function : IR.Function) : String :=
   let result := if function.name == "main" then "int" else "int64_t"
@@ -106,10 +106,15 @@ def emit (program : IR.Program) : String := Id.run do
       hasPrototype := true
   output := output ++ "\n"
   for function in program.functions do
-    let (body, _) := emitInstructions function.parameters function.body "  " 0
     output := output ++ "\n" ++ (if function.name == "main" then "" else "static ") ++
-      emitHeader function ++ " {\n" ++ body
-    if function.name == "main" then output := output ++ "  return 0;\n"
+      emitHeader function ++ " {\n"
+    let mut next := 0
+    for h : index in [:function.blocks.size] do
+      let block := function.blocks[index]
+      let (body, after) := emitInstructions function.parameters block.instructions "    " next
+      let (terminator, after) := emitTerminator function.parameters after block.terminator
+      output := output ++ s!"  bb{index}: " ++ "{\n" ++ body ++ terminator ++ "  }\n"
+      next := after
     output := output ++ "}\n"
   return output
 
