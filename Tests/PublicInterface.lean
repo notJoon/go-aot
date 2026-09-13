@@ -12,6 +12,8 @@ example : GoAot.Diagnostic → GoAot.Source → String := GoAot.Diagnostic.rende
 #check_failure GoAot.IR.IntExpr
 #check_failure GoAot.IR.Block
 #check_failure GoAot.IR.Terminator
+#check_failure GoAot.IR.VerifyError
+#check_failure GoAot.IR.verify
 #check_failure GoAot.Lowering.lower
 #check_failure GoAot.Backend.C.emit
 #check_failure GoAot.Backend.LLVM.emit
