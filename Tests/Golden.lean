@@ -142,11 +142,11 @@ private def checkInvalidSSARejected : IO Unit := do
 
 private def checkDirectCFG : IO Unit := do
   let program : IR.Program := ⟨#[
-    ⟨"main", #[], .void, #[⟨#[.printInt (.call "walk" #[])], .ret none⟩]⟩,
+    ⟨"main", #[], .void, #[⟨#[.call 0 "walk" #[], .printInt (.value 0)], .ret none⟩]⟩,
     ⟨"walk", #[], .int, #[
       ⟨#[], .br 2⟩,
       ⟨#[.printInt (.literal 11)], .ret (some (.literal 7))⟩,
-      ⟨#[], .condBr (.less (.literal 1) (.literal 0)) 2 1⟩,
+      ⟨#[.binary 0 .less (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
       ⟨#[], .br 3⟩]⟩]⟩
   let .ok () := IR.verify program | throw (IO.userError "valid cyclic CFG rejected")
   let c ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11", "-pedantic-errors"] (Backend.C.emit program)

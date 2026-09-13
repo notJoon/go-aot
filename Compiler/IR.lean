@@ -4,15 +4,22 @@ public section
 
 namespace GoAot.IR
 
-inductive IntExpr where
+abbrev ValueId := Nat
+
+inductive Operand where
+  | value (id : ValueId)
   | literal (value : Nat)
   | argument (index : Nat)
-  | call (name : String) (arguments : Array IntExpr)
-  | add (left right : IntExpr)
-  | subtract (left right : IntExpr)
 
-inductive BoolExpr where
-  | less (left right : IntExpr)
+inductive ValueKind where
+  | int
+  | bool
+  deriving BEq
+
+inductive Op where
+  | add
+  | subtract
+  | less
 
 abbrev BlockId := Nat
 
@@ -21,15 +28,19 @@ inductive ReturnKind where
   | int
   deriving BEq
 
+-- Values are defined once per function and used only after their definition in the same block.
+-- Local variables will require relaxing the block-local rule to dominance checking.
 inductive Instruction where
+  | binary (result : ValueId) (op : Op) (left right : Operand)
+  | call (result : ValueId) (name : String) (arguments : Array Operand)
   -- Source escapes are decoded during lowering so every backend receives identical bytes.
   | printString (bytes : ByteArray)
-  | printInt (value : IntExpr)
+  | printInt (value : Operand)
 
 inductive Terminator where
   | br (target : BlockId)
-  | condBr (condition : BoolExpr) (ifTrue ifFalse : BlockId)
-  | ret (value : Option IntExpr)
+  | condBr (condition : Operand) (ifTrue ifFalse : BlockId)
+  | ret (value : Option Operand)
 
 structure Block where
   instructions : Array Instruction

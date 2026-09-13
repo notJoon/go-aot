@@ -10,10 +10,6 @@ namespace GoAot.Lowering
 private def diagnosticAt (span : Span) (message : String) : Diagnostic :=
   ⟨.lowering, some span, message⟩
 
-private inductive Scalar where
-  | int (value : IR.IntExpr)
-  | bool (value : IR.BoolExpr)
-
 private structure Signature where
   name : String
   parameters : Array String
@@ -102,43 +98,6 @@ private def decodeString (literal : String) (span : Span) : Except Diagnostic By
     | _ => throw (diagnosticAt span "unterminated string literal")
   | _ => throw (diagnosticAt span "raw string literals are not supported yet")
 
-private partial def lowerScalar (all : Array Signature) (locals : Array String) :
-    Syntax.Expr → Except Diagnostic Scalar
-  | .intLiteral text span =>
-    match text.toNat? with
-    | some value => do
-      if value > 9223372036854775807 then
-        throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
-      return .int (.literal value)
-    | none => throw (diagnosticAt span s!"unsupported integer literal '{text}'")
-  | .identifier name => do
-    let some index := locals.findIdx? (· == name.text)
-      | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-    return .int (.argument index)
-  | .call callee arguments span => do
-    let some signature := findSignature? all callee.text
-      | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
-    unless signature.returnsInt do
-      throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
-    if arguments.size != signature.parameters.size then
-      throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
-    let mut lowered := #[]
-    for argument in arguments do
-      let .int value ← lowerScalar all locals argument
-        | throw (diagnosticAt argument.span "function arguments must be int")
-      lowered := lowered.push value
-    return .int (.call callee.text lowered)
-  | .binary op left right span => do
-    let left ← lowerScalar all locals left
-    let right ← lowerScalar all locals right
-    let (.int left, .int right) := (left, right)
-      | throw (diagnosticAt span "binary operands must be int")
-    match op with
-    | .add => return .int (.add left right)
-    | .subtract => return .int (.subtract left right)
-    | .less => return .bool (.less left right)
-  | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
-
 private structure PendingBlock where
   instructions : Array IR.Instruction := #[]
   terminator : Option IR.Terminator := none
@@ -146,6 +105,7 @@ private structure PendingBlock where
 private structure Builder where
   blocks : Array PendingBlock := #[{}]
   current : Option IR.BlockId := some 0
+  nextValue : IR.ValueId := 0
 
 private def builderError : Diagnostic :=
   ⟨.lowering, none, "internal error: invalid CFG builder state"⟩
@@ -166,8 +126,9 @@ private def Builder.terminate (builder : Builder) (terminator : IR.Terminator) :
   let some current := builder.current | throw builderError
   let some block := builder.blocks[current]? | throw builderError
   if block.terminator.isSome then throw builderError
-  return { blocks := builder.blocks.set! current ({ block with terminator := some terminator })
-           current := none }
+  return { builder with
+    blocks := builder.blocks.set! current { block with terminator := some terminator }
+    current := none }
 
 private def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
     Except Diagnostic Builder := do
@@ -181,6 +142,56 @@ private def Builder.finish (builder : Builder) : Except Diagnostic (Array IR.Blo
     let some terminator := block.terminator | throw builderError
     return ⟨block.instructions, terminator⟩
 
+private def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → IR.Instruction) :
+    Except Diagnostic (IR.Operand × Builder) := do
+  -- Dead source still checks kinds, but its placeholder never enters the live CFG.
+  if builder.current.isNone then return (.literal 0, builder)
+  let id := builder.nextValue
+  let builder ← builder.emit (instruction id)
+  return (.value id, { builder with nextValue := id + 1 })
+
+private partial def lowerOperand (all : Array Signature) (locals : Array String)
+    (builder : Builder) : Syntax.Expr → Except Diagnostic (IR.Operand × IR.ValueKind × Builder)
+  | .intLiteral text span =>
+    match text.toNat? with
+    | some value => do
+      if value > 9223372036854775807 then
+        throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
+      return (.literal value, .int, builder)
+    | none => throw (diagnosticAt span s!"unsupported integer literal '{text}'")
+  | .identifier name => do
+    let some index := locals.findIdx? (· == name.text)
+      | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
+    return (.argument index, .int, builder)
+  | .call callee arguments span => do
+    let some signature := findSignature? all callee.text
+      | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
+    unless signature.returnsInt do
+      throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
+    if arguments.size != signature.parameters.size then
+      throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
+    let mut lowered := #[]
+    let mut builder := builder
+    for argument in arguments do
+      let (value, kind, next) ← lowerOperand all locals builder argument
+      unless kind == .int do throw (diagnosticAt argument.span "function arguments must be int")
+      lowered := lowered.push value
+      builder := next
+    let (value, next) ← builder.emitValue (.call · callee.text lowered)
+    return (value, .int, next)
+  | .binary op left right span => do
+    let (left, leftKind, builder) ← lowerOperand all locals builder left
+    let (right, rightKind, builder) ← lowerOperand all locals builder right
+    unless leftKind == .int && rightKind == .int do
+      throw (diagnosticAt span "binary operands must be int")
+    let (op, kind) : IR.Op × IR.ValueKind := match op with
+      | .add => (.add, .int)
+      | .subtract => (.subtract, .int)
+      | .less => (.less, .bool)
+    let (value, builder) ← builder.emitValue (.binary · op left right)
+    return (value, kind, builder)
+  | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
+
 mutual
   private partial def lowerStatement (all : Array Signature) (signature : Signature)
       (builder : Builder) : Syntax.Stmt → Except Diagnostic Builder
@@ -190,28 +201,28 @@ mutual
       let some argument := arguments[0]?
         | throw (diagnosticAt span "println expects one argument")
       if arguments.size != 1 then throw (diagnosticAt span "println expects one argument")
-      let instruction ← match argument with
+      let (instruction, builder) ← match argument with
         | .stringLiteral literal span =>
-          pure (IR.Instruction.printString (← decodeString literal span))
+          pure (IR.Instruction.printString (← decodeString literal span), builder)
         | _ => do
-          let .int value ← lowerScalar all signature.parameters argument
-            | throw (diagnosticAt argument.span "println supports only string and int")
-          pure (.printInt value)
+          let (value, kind, builder) ← lowerOperand all signature.parameters builder argument
+          unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
+          pure (.printInt value, builder)
       if builder.current.isSome then builder.emit instruction else pure builder
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      let .int value ← lowerScalar all signature.parameters value
-        | throw (diagnosticAt value.span "return value must be int")
-      if builder.current.isSome then builder.terminate (.ret (some value)) else pure builder
+      let (operand, kind, builder) ← lowerOperand all signature.parameters builder value
+      unless kind == .int do throw (diagnosticAt value.span "return value must be int")
+      if builder.current.isSome then builder.terminate (.ret (some operand)) else pure builder
     | .ifThen condition body => do
-      let .bool condition ← lowerScalar all signature.parameters condition
-        | throw (diagnosticAt condition.span "if condition must be bool")
+      let (operand, kind, builder) ← lowerOperand all signature.parameters builder condition
+      unless kind == .bool do throw (diagnosticAt condition.span "if condition must be bool")
       -- Closed paths still check source semantics, without reserving unreachable blocks.
       if builder.current.isNone then return ← lowerStatements all signature builder body
       let (thenBlock, builder) := builder.newBlock
       let (continuation, builder) := builder.newBlock
-      let builder ← builder.terminate (.condBr condition thenBlock continuation)
+      let builder ← builder.terminate (.condBr operand thenBlock continuation)
       let builder ← builder.selectBlock thenBlock
       let builder ← lowerStatements all signature builder body
       let builder ← if builder.current.isSome then builder.terminate (.br continuation) else pure builder
@@ -240,7 +251,7 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
       throw (diagnosticAt function.name.span s!"function '{signature.name}' must return int")
     let builder ← lowerStatements all signature {} function.body
     if signature.returnsInt then
-      match function.body[function.body.size - 1]? with
+      match function.body.back? with
       | some (.return _) => pure ()
       | _ => throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
     let builder ← if builder.current.isSome then

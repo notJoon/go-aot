@@ -13,17 +13,10 @@ example : Syntax.File → Except Diagnostic IR.Program := Lowering.lower
 #check_failure fun (file : Syntax.File) => Backend.C.emit file
 #check_failure fun (file : Syntax.File) => Backend.LLVM.emit file
 
--- These terms must fail because their expression types disagree.
-private def intValue : IR.IntExpr := .literal 1
-private def boolValue : IR.BoolExpr := .less intValue intValue
-#check_failure IR.Instruction.printInt boolValue
-#check_failure IR.Instruction.return intValue
-#check_failure IR.Instruction.ifThen boolValue #[]
-#check_failure IR.Terminator.ret (some boolValue)
-#check_failure IR.Terminator.condBr intValue 1 2
+private def intValue : IR.Operand := .literal 1
+private def comparison : IR.Instruction := .binary 0 .less intValue intValue
+private def boolValue : IR.Operand := .value 0
 #check_failure (show IR.Block from { instructions := #[] })
-#check_failure IR.IntExpr.call "f" #[boolValue]
-#check_failure IR.BoolExpr.less boolValue intValue
 
 -- Both backends have the same success contract for lowered programs.
 example : IR.Program → String := Backend.C.emit
@@ -67,17 +60,17 @@ private def verifyContracts : IO Unit := do
     (.condBr boolValue 1 2, "branch target 1 is out of range"),
     (.ret (some intValue), "void function cannot return a value")]
   for (terminator, message) in invalidTerminators do
-    verifyRejected ⟨#[{ mainFunction with blocks := #[⟨#[], terminator⟩] }]⟩ message
-  let invalidExpressions : Array (IR.IntExpr × String) := #[
-    (.literal 9223372036854775808, "integer literal exceeds signed 64-bit range"),
-    (.argument 0, "argument index 0 is out of range"),
-    (.call "missing" #[], "unknown function 'missing'"),
-    (.call "f" #[], "function 'f' expects 1 arguments"),
-    (.call "main" #[], "function 'main' does not return int"),
-    (.call "f" #[.argument 0], "argument index 0 is out of range"),
-    (.add intValue (.subtract (.argument 0) intValue), "argument index 0 is out of range")]
-  for (expression, message) in invalidExpressions do
-    verifyRejected ⟨#[{ mainFunction with blocks := #[⟨#[.printInt expression], .ret none⟩] },
+    verifyRejected ⟨#[{ mainFunction with blocks := #[⟨#[comparison], terminator⟩] }]⟩ message
+  let invalidInstructions : Array (IR.Instruction × String) := #[
+    (.printInt (.literal 9223372036854775808), "integer literal exceeds signed 64-bit range"),
+    (.printInt (.argument 0), "argument index 0 is out of range"),
+    (.call 0 "missing" #[], "unknown function 'missing'"),
+    (.call 0 "f" #[], "function 'f' expects 1 arguments"),
+    (.call 0 "main" #[], "function 'main' does not return int"),
+    (.call 0 "f" #[.argument 0], "argument index 0 is out of range"),
+    (.binary 0 .add intValue (.argument 0), "argument index 0 is out of range")]
+  for (instruction, message) in invalidInstructions do
+    verifyRejected ⟨#[{ mainFunction with blocks := #[⟨#[instruction], .ret none⟩] },
       intFunction]⟩ message
   verifyRejected ⟨#[{ mainFunction with blocks :=
     #[⟨#[], .ret none⟩, ⟨#[.printInt (.argument 0)], .ret none⟩] }]⟩
@@ -85,19 +78,19 @@ private def verifyContracts : IO Unit := do
   verifyRejected ⟨#[mainFunction, { intFunction with blocks :=
     #[⟨#[], .ret (some (.argument 1))⟩] }]⟩ "argument index 1 is out of range"
   verifyRejected ⟨#[{ mainFunction with blocks :=
-    #[⟨#[], .condBr (.less (.argument 0) intValue) 1 1⟩, ⟨#[], .ret none⟩] }]⟩
+    #[⟨#[.binary 0 .less (.argument 0) intValue], .condBr boolValue 1 1⟩, ⟨#[], .ret none⟩] }]⟩
     "argument index 0 is out of range"
   for target in #[0, 2] do
     verifyRejected ⟨#[{ mainFunction with blocks :=
-      #[⟨#[], .condBr boolValue 1 target⟩, ⟨#[], .ret none⟩] }]⟩
+      #[⟨#[comparison], .condBr boolValue 1 target⟩, ⟨#[], .ret none⟩] }]⟩
       (if target == 0 then "branch to entry block is not allowed"
        else "branch target 2 is out of range")
   verifyAccepted ⟨#[{ mainFunction with blocks :=
-    #[⟨#[], .br 1⟩, ⟨#[], .condBr boolValue 1 1⟩,
+    #[⟨#[], .br 1⟩, ⟨#[comparison], .condBr boolValue 1 1⟩,
       ⟨#[.printString (ByteArray.mk #[0, 255]), .printInt (.literal 9223372036854775807)], .ret none⟩] }]⟩
   verifyAccepted ⟨#[mainFunction,
-    { intFunction with blocks := #[⟨#[], .ret (some (.call "g" #[.argument 0]))⟩] },
-    { intFunction with name := "g", blocks := #[⟨#[], .ret (some (.call "f" #[.argument 0]))⟩] }]⟩
+    { intFunction with blocks := #[⟨#[.call 0 "g" #[.argument 0]], .ret (some (.value 0))⟩] },
+    { intFunction with name := "g", blocks := #[⟨#[.call 0 "f" #[.argument 0]], .ret (some (.value 0))⟩] }]⟩
   let .error instructionError := IR.verify ⟨#[{ mainFunction with blocks :=
       #[⟨#[.printString ByteArray.empty, .printInt (.argument 0)], .ret none⟩] }]⟩
     | throw (IO.userError "expected instruction error")
@@ -110,6 +103,45 @@ private def verifyContracts : IO Unit := do
       terminatorError.instruction? == none && terminatorError.terminator &&
       terminatorError.render == "internal error: invalid IR in function 'main', block 0, terminator: branch to entry block is not allowed" do
     throw (IO.userError "incorrect terminator error location")
+
+private def verifyValues : IO Unit := do
+  let definition : IR.Instruction := .binary 0 .add intValue intValue
+  let cases : Array (Array IR.Block × String × Nat × Option Nat × Bool) := #[
+    (#[⟨#[.printInt (.value 42)], .ret none⟩],
+      "value 42 is not defined earlier in this block", 0, some 0, false),
+    (#[⟨#[.printInt (.value 0), definition], .ret none⟩],
+      "value 0 is not defined earlier in this block", 0, some 0, false),
+    (#[⟨#[.binary 0 .add (.value 0) intValue], .ret none⟩],
+      "value 0 is not defined earlier in this block", 0, some 0, false),
+    (#[⟨#[definition, definition], .ret none⟩],
+      "value 0 is defined more than once", 0, some 1, false),
+    (#[⟨#[definition], .br 1⟩, ⟨#[definition], .ret none⟩],
+      "value 0 is defined more than once", 1, some 0, false),
+    (#[⟨#[definition], .br 1⟩, ⟨#[.printInt (.value 0)], .ret none⟩],
+      "value 0 is not defined earlier in this block", 1, some 0, false),
+    (#[⟨#[], .condBr intValue 1 1⟩, ⟨#[], .ret none⟩],
+      "expected bool operand", 0, none, true),
+    (#[⟨#[comparison, .binary 1 .add boolValue intValue], .ret none⟩],
+      "expected int operand", 0, some 1, false),
+    (#[⟨#[comparison, .call 1 "f" #[boolValue]], .ret none⟩],
+      "expected int operand", 0, some 1, false),
+    (#[⟨#[comparison, .printInt boolValue], .ret none⟩],
+      "expected int operand", 0, some 1, false)]
+  for (blocks, message, block, instruction, terminator) in cases do
+    let .error error := IR.verify ⟨#[{ mainFunction with blocks }, intFunction]⟩
+      | throw (IO.userError s!"value verifier accepted: {message}")
+    unless error.message == message && error.function? == some "main" &&
+        error.block? == some block && error.instruction? == instruction && error.terminator == terminator do
+      throw (IO.userError s!"incorrect value error: {error.render}")
+  let .error error := IR.verify ⟨#[mainFunction,
+      { intFunction with blocks := #[⟨#[comparison], .ret (some boolValue)⟩] }]⟩
+    | throw (IO.userError "value verifier accepted bool return")
+  unless error.message == "expected int operand" && error.function? == some "f" &&
+      error.block? == some 0 && error.instruction? == none && error.terminator do
+    throw (IO.userError s!"incorrect return kind error: {error.render}")
+  verifyAccepted ⟨#[{ mainFunction with blocks :=
+    #[⟨#[.binary 100 .add intValue intValue, .binary 7 .subtract (.value 100) intValue,
+      .call 42 "f" #[.value 7], .printInt (.value 42)], .ret none⟩] }, intFunction]⟩
 
 private def checkReturnKinds : IO Unit := do
   -- Exercise the backend field contract before source syntax permits non-main void functions.
@@ -145,6 +177,7 @@ private def checkLLVMRuntimeNeeds : IO Unit := do
 
 def irMain : IO Unit := do
   verifyContracts
+  verifyValues
   checkReturnKinds
   checkLLVMRuntimeNeeds
   let source := Source.ofString
@@ -153,10 +186,10 @@ def irMain : IO Unit := do
   let .ok program := Lowering.lower file | throw (IO.userError "IR fixture did not lower")
   verifyAccepted program
   match program.functions[0]?.map (·.blocks) with
-  | some #[⟨#[], .ret (some (.subtract (.argument 1) (.argument 0)))⟩] => pure ()
+  | some #[⟨#[.binary 0 .subtract (.argument 1) (.argument 0)], .ret (some (.value 0))⟩] => pure ()
   | _ => throw (IO.userError "lowering did not resolve parameter positions")
   let source := Source.ofString
-    "package main\nfunc f() int { return 1; println(\"dead\"); if 1 < 2 { println(3) }; return 2 }\nfunc main() {}"
+    "package main\nfunc f() int { return 1; println(\"dead\"); if 1 < 2 { println(f() + f()) }; return f() }\nfunc main() {}"
   let .ok file := parse source | throw (IO.userError "dead-source fixture did not parse")
   let .ok program := Lowering.lower file | throw (IO.userError "dead-source fixture did not lower")
   verifyAccepted program

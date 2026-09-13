@@ -17,39 +17,10 @@ private def emitParameters (parameters : Array String) : String := Id.run do
     result := result ++ "int64_t go_" ++ parameter
   return result
 
--- Named temporaries preserve Go evaluation order because C leaves operand and argument order unspecified.
-private partial def emitExpr (parameters : Array String) (indent : String) (nextTemp : Nat) :
-    IR.IntExpr → String × String × Nat
-  | .literal value => ("", toString value, nextTemp)
-  | .argument index => ("", "go_" ++ parameters[index]!, nextTemp)
-  | .call name arguments => Id.run do
-    let mut output := ""
-    let mut values := #[]
-    let mut next := nextTemp
-    for argument in arguments do
-      let (code, value, after) := emitExpr parameters indent next argument
-      output := output ++ code
-      values := values.push value
-      next := after
-    let result := s!"go_tmp_{next}"
-    return (output ++ indent ++ s!"int64_t {result} = {cName name}(" ++
-      String.intercalate ", " values.toList ++ ");\n", result, next + 1)
-  | expression@(.add left right) | expression@(.subtract left right) =>
-    let (leftCode, leftValue, next) := emitExpr parameters indent nextTemp left
-    let (rightCode, rightValue, next) := emitExpr parameters indent next right
-    let result := s!"go_tmp_{next}"
-    let symbol := match expression with | .add .. => "+" | _ => "-"
-    (leftCode ++ rightCode ++ indent ++
-      s!"int64_t {result} = {leftValue} {symbol} {rightValue};\n", result, next + 1)
-
-private def emitBoolExpr (parameters : Array String) (indent : String) (nextTemp : Nat) :
-    IR.BoolExpr → String × String × Nat
-  | .less left right =>
-    let (leftCode, leftValue, next) := emitExpr parameters indent nextTemp left
-    let (rightCode, rightValue, next) := emitExpr parameters indent next right
-    let result := s!"go_tmp_{next}"
-    (leftCode ++ rightCode ++ indent ++
-      s!"int64_t {result} = {leftValue} < {rightValue};\n", result, next + 1)
+private def operand (parameters : Array String) : IR.Operand → String
+  | .value id => s!"go_tmp_{id}"
+  | .literal value => toString value
+  | .argument index => "go_" ++ parameters[index]!
 
 private def hexDigit : Nat → String
   | 0 => "0" | 1 => "1" | 2 => "2" | 3 => "3" | 4 => "4" | 5 => "5"
@@ -65,34 +36,32 @@ private def emitBytes (bytes : ByteArray) : String := Id.run do
 
 -- Explicit byte counts preserve embedded NUL values during string output.
 private def emitInstructions (parameters : Array String)
-    (instructions : Array IR.Instruction) (indent : String)
-    (nextTemp : Nat) : String × Nat :=
-  Id.run do
-    let mut result := ""
-    let mut next := nextTemp
-    for instruction in instructions do
-      match instruction with
-      | .printString bytes => result := result ++ indent ++ "fwrite(\"" ++ emitBytes bytes ++
-          s!"\", 1, {bytes.size}, stdout); putchar('\\n');\n"
-      | .printInt expression =>
-        let (code, value, after) := emitExpr parameters indent next expression
-        result := result ++ code ++ indent ++
-          "printf(\"%lld\\n\", (long long)" ++ value ++ ");\n"
-        next := after
-    return (result, next)
+    (instructions : Array IR.Instruction) (indent : String) : String := Id.run do
+  let mut result := ""
+  for instruction in instructions do
+    match instruction with
+    | .binary id op left right =>
+      let symbol := match op with | .add => "+" | .subtract => "-" | .less => "<"
+      result := result ++ indent ++
+        s!"int64_t go_tmp_{id} = {operand parameters left} {symbol} {operand parameters right};\n"
+    | .call id name arguments =>
+      result := result ++ indent ++ s!"int64_t go_tmp_{id} = {cName name}(" ++
+        String.intercalate ", " (arguments.toList.map (operand parameters)) ++ ");\n"
+    | .printString bytes => result := result ++ indent ++ "fwrite(\"" ++ emitBytes bytes ++
+        s!"\", 1, {bytes.size}, stdout); putchar('\\n');\n"
+    | .printInt value =>
+      result := result ++ indent ++
+        "printf(\"%lld\\n\", (long long)" ++ operand parameters value ++ ");\n"
+  return result
 
-private def emitTerminator (function : IR.Function) (nextTemp : Nat) :
-    IR.Terminator → String × Nat
-  | .br target => (s!"    goto bb{target};\n", nextTemp)
+private def emitTerminator (function : IR.Function) : IR.Terminator → String
+  | .br target => s!"    goto bb{target};\n"
   | .condBr condition ifTrue ifFalse =>
-    let (code, value, next) := emitBoolExpr function.parameters "    " nextTemp condition
-    (code ++ s!"    if ({value}) goto bb{ifTrue}; else goto bb{ifFalse};\n", next)
+    s!"    if ({operand function.parameters condition}) goto bb{ifTrue}; else goto bb{ifFalse};\n"
   | .ret none =>
-    ((if function.returnKind == .void && function.name != "main" then "    return;\n"
-      else "    return 0;\n"), nextTemp)
-  | .ret (some expression) =>
-    let (code, value, next) := emitExpr function.parameters "    " nextTemp expression
-    (code ++ s!"    return {value};\n", next)
+    if function.returnKind == .void && function.name != "main" then "    return;\n"
+    else "    return 0;\n"
+  | .ret (some value) => s!"    return {operand function.parameters value};\n"
 
 private def emitHeader (function : IR.Function) : String :=
   let result := match function.returnKind with
@@ -112,13 +81,11 @@ def emit (program : IR.Program) : String := Id.run do
   for function in program.functions do
     output := output ++ "\n" ++ (if function.name == "main" then "" else "static ") ++
       emitHeader function ++ " {\n"
-    let mut next := 0
     for h : index in [:function.blocks.size] do
       let block := function.blocks[index]
-      let (body, after) := emitInstructions function.parameters block.instructions "    " next
-      let (terminator, after) := emitTerminator function after block.terminator
+      let body := emitInstructions function.parameters block.instructions "    "
+      let terminator := emitTerminator function block.terminator
       output := output ++ s!"  bb{index}: " ++ "{\n" ++ body ++ terminator ++ "  }\n"
-      next := after
     output := output ++ "}\n"
   return output
 
