@@ -10,6 +10,7 @@ inductive Operand where
   | value (id : ValueId)
   | literal (value : Nat)
   | argument (index : Nat)
+  deriving BEq
 
 inductive ValueKind where
   | int

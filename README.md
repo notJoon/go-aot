@@ -48,6 +48,12 @@ The MVP follows the ADR vertically as
 It currently supports `int` functions, parameters, returns, `if`, recursive calls,
 `+`, `-`, `<`, and `println` for strings and integers.
 
+`Compiler/Scope.lean` resolves body identifiers through nested symbol tables.
+Each symbol records its parameter or local kind, IR operand, value kind, and
+declaration span. Parameters share the function body's scope. An `if` body gets
+a child scope, which is discarded when lowering returns to the enclosing block.
+Local declaration syntax and mutable storage remain separate work.
+
 `int` is a signed 64-bit value with wrapping add/subtract. Function arguments and
 binary operands are evaluated left to right. Locals, assignment, loops, `else`, raw
 strings, and other Go constructs are rejected. The temporary C backend is not the
