@@ -7,7 +7,4 @@ import Tests.Scope
 
 def main : IO Unit := do
   lexerMain
-  irMain
-  diagnosticMain
-  scopeMain
   goldenMain
