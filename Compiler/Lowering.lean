@@ -77,7 +77,10 @@ private def Builder.emit (builder : Builder) (instruction : IR.Instruction) :
   let some current := builder.current | return builder
   let some block := builder.blocks[current]? | throw builderError
   if block.terminator.isSome then throw builderError
-  let blocks := builder.blocks.set! current { block with instructions := block.instructions.push instruction }
+  -- `block` above shares the instruction array with `blocks`. Pushing through it copied the whole
+  -- array on every emit. `modify` takes the element out first, allowing the push to happen in place.
+  let blocks := builder.blocks.modify current fun block =>
+    { block with instructions := block.instructions.push instruction }
   return { builder with blocks }
 
 private def Builder.terminate (builder : Builder) (terminator : IR.Terminator) :
