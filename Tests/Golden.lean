@@ -167,6 +167,7 @@ def goldenMain : IO Unit := do
   checkCompileGolden "hello"
   checkCompileGolden "fib"
   checkCompileGolden "tail_add"
+  checkCompileGolden "collision"
   checkLLVM "hello" true
   checkLLVM "generic_if" true
   checkLLVM "tail_add" true
@@ -182,6 +183,7 @@ def goldenMain : IO Unit := do
   checkDifferential "semantics"
   checkDifferential "strings"
   checkDifferential "cfg"
+  checkDifferential "collision"
   checkDirectCFG
   checkNulString
   checkInvalidSSARejected

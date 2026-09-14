@@ -1,13 +1,11 @@
 module
 
 public import Compiler.IR
+import Compiler.Backend.Symbol
 
 public section
 
 namespace GoAot.Backend.LLVM
-
-private def llvmName (name : String) : String :=
-  if name == "main" then name else "go_" ++ name
 
 -- Collect declarations and deduplicate string globals before any function is emitted.
 private def collectRuntimeNeeds (program : IR.Program) :
@@ -55,7 +53,7 @@ private def emitInstructions (strings : Array ByteArray)
       output := output.push s!"  %v{id} = {operation} {operand left}, {operand right}\n"
     | .call id name arguments =>
       let values := arguments.toList.map fun value => "i64 " ++ operand value
-      output := output.push (s!"  %v{id} = call i64 @{llvmName name}(" ++
+      output := output.push (s!"  %v{id} = call i64 @{Symbol.function name}(" ++
         String.intercalate ", " values ++ ")\n")
     | .printString bytes =>
       let index := strings.idxOf bytes
@@ -67,22 +65,22 @@ private def emitInstructions (strings : Array ByteArray)
 private def resultType (function : IR.Function) : String :=
   match function.returnKind with
   | .int => "i64"
-  | .void => if function.name == "main" then "i32" else "void"
+  | .void => if Symbol.isEntry function then "i32" else "void"
 
 private def emitTerminator (function : IR.Function) : IR.Terminator → String
   | .br target => s!"  br label %bb{target}\n"
   | .condBr condition ifTrue ifFalse =>
     s!"  br i1 {operand condition}, label %bb{ifTrue}, label %bb{ifFalse}\n"
   | .ret none =>
-    if function.returnKind == .void && function.name != "main" then "  ret void\n"
+    if Symbol.returnsVoid function then "  ret void\n"
     else s!"  ret {resultType function} 0\n"
   | .ret (some value) => s!"  ret {resultType function} {operand value}\n"
 
 private def emitFunction (strings : Array ByteArray) (output : Array String)
     (function : IR.Function) : Array String := Id.run do
   let parameters := function.parameters.mapIdx fun index _ => s!"i64 %arg{index}"
-  let linkage := if function.name == "main" then "" else "internal "
-  let mut output := output.push (s!"define {linkage}{resultType function} @{llvmName function.name}(" ++
+  let linkage := if Symbol.isEntry function then "" else "internal "
+  let mut output := output.push (s!"define {linkage}{resultType function} @{Symbol.function function.name}(" ++
     String.intercalate ", " parameters.toList ++ ") {\n")
   for h : index in [:function.blocks.size] do
     let block := function.blocks[index]

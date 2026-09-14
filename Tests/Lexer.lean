@@ -2,6 +2,26 @@ import Compiler.Lexer
 
 open GoAot
 
+private def runString (p : Parser.StringParse α) (text : String) : Option (α × String) :=
+  match p ⟨text, text.startPos⟩ with
+  | .ok rest value => some (value, (rest.1.sliceFrom rest.2).copy)
+  | .err _ _ => none
+
+section
+open Parser
+
+#guard runString (tried (skipStr "//")) "// c" == some (true, " c")
+#guard runString (tried (skipStr "//")) "/x" == some (false, "/x")
+#guard runString (tried (do skip; skipStr "y")) "ab" == some (false, "ab")
+#guard runString (do skipStr "가"; offset) "가a" == some (3, "a")
+#guard runString (skipStr "ab") "ac" == none
+#guard runString (peekIs (· == 'a')) "" == some (false, "")
+#guard runString (skipIf (· == 'a')) "ba" == some (false, "ba")
+#guard runString (expect '\'' "closing '") "x" == none
+#guard runString (skipWhile Char.isDigit) "12ab" == some ((), "ab")
+
+end
+
 private def check (ok : Bool) (label : String) : IO Unit :=
   unless ok do throw (IO.userError label)
 
@@ -53,7 +73,7 @@ private def checkConstantAllocations (label : String) (p : Lex.P α) (short long
 private def lexMain : IO Unit := do
   let chars (c : Char) (n : Nat) := String.ofList (List.replicate n c)
   let copies (s : String) (n : Nat) := String.join (List.replicate n s)
-  checkConstantAllocations "whitespace" (Lex.skipWhile Lex.isSpace) (chars ' ' 8) (chars ' ' 10000)
+  checkConstantAllocations "whitespace" (Parser.skipWhile Lex.isSpace) (chars ' ' 8) (chars ' ' 10000)
   checkConstantAllocations "block comment" Lex.blockCommentBody
     (copies "*a" 4 ++ "*/") (copies "*a" 5000 ++ "*/")
   checkConstantAllocations "digits" (Lex.digitSeq Char.isDigit)

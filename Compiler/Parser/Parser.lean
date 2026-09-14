@@ -160,4 +160,16 @@ def skip : Parse ι Unit := fun it =>
   else
     .err it (.other "skip: expected element to skip")
 
+/--
+Runs `p` and reports whether it succeeded, rewinding on failure.
+Success consumes input, so wrap `p` in `lookAhead` when only testing a prefix.
+
+Example: `tried (skipStr "//")` on `"// c"` returns `true` and leaves `" c"`.
+On `"/x"` it returns `false` and leaves `"/x"`.
+-/
+def tried (p : Parse ι α) : Parse ι Bool :=
+  (do
+    let _ ← attempt p
+    return true) <|> pure false
+
 end Parser
