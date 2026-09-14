@@ -1,13 +1,11 @@
 module
 
 public import Compiler.IR
+import Compiler.Backend.Symbol
 
 public section
 
 namespace GoAot.Backend.C
-
-private def cName (name : String) : String :=
-  if name == "main" then name else "go_" ++ name
 
 private def emitParameters (parameters : Array String) : String := Id.run do
   if parameters.isEmpty then return "void"
@@ -45,7 +43,7 @@ private def emitInstructions (parameters : Array String)
       result := result ++ indent ++
         s!"int64_t go_tmp_{id} = {operand parameters left} {symbol} {operand parameters right};\n"
     | .call id name arguments =>
-      result := result ++ indent ++ s!"int64_t go_tmp_{id} = {cName name}(" ++
+      result := result ++ indent ++ s!"int64_t go_tmp_{id} = {Symbol.function name}(" ++
         String.intercalate ", " (arguments.toList.map (operand parameters)) ++ ");\n"
     | .printString bytes => result := result ++ indent ++ "fwrite(\"" ++ emitBytes bytes ++
         s!"\", 1, {bytes.size}, stdout); putchar('\\n');\n"
@@ -59,27 +57,27 @@ private def emitTerminator (function : IR.Function) : IR.Terminator → String
   | .condBr condition ifTrue ifFalse =>
     s!"    if ({operand function.parameters condition}) goto bb{ifTrue}; else goto bb{ifFalse};\n"
   | .ret none =>
-    if function.returnKind == .void && function.name != "main" then "    return;\n"
+    if Symbol.returnsVoid function then "    return;\n"
     else "    return 0;\n"
   | .ret (some value) => s!"    return {operand function.parameters value};\n"
 
 private def emitHeader (function : IR.Function) : String :=
   let result := match function.returnKind with
     | .int => "int64_t"
-    | .void => if function.name == "main" then "int" else "void"
-  result ++ " " ++ cName function.name ++ "(" ++ emitParameters function.parameters ++ ")"
+    | .void => if Symbol.isEntry function then "int" else "void"
+  result ++ " " ++ Symbol.function function.name ++ "(" ++ emitParameters function.parameters ++ ")"
 
 def emit (program : IR.Program) : String := Id.run do
   let mut output := "#include <stdint.h>\n#include <stdio.h>"
   let mut hasPrototype := false
   for function in program.functions do
-    if function.name != "main" then
+    if !Symbol.isEntry function then
       output := output ++ (if hasPrototype then "\n" else "\n\n") ++
         "static " ++ emitHeader function ++ ";"
       hasPrototype := true
   output := output ++ "\n"
   for function in program.functions do
-    output := output ++ "\n" ++ (if function.name == "main" then "" else "static ") ++
+    output := output ++ "\n" ++ (if Symbol.isEntry function then "" else "static ") ++
       emitHeader function ++ " {\n"
     for h : index in [:function.blocks.size] do
       let block := function.blocks[index]
