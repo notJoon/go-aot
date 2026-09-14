@@ -1,0 +1,2 @@
+*.c.golden linguist-language=C
+*.ll.golden linguist-language=LLVM
