@@ -162,9 +162,10 @@ def skip : Parse ι Unit := fun it =>
 
 /--
 Runs `p` and reports whether it succeeded, rewinding on failure.
-Success consumes input; use `lookAhead` as well when only testing a prefix.
-`tried (skipStr "//")` on `"// c"` returns `true` and leaves `" c"`; on `"/x"` it returns `false`
-and leaves `"/x"`.
+Success consumes input, so wrap `p` in `lookAhead` when only testing a prefix.
+
+Example: `tried (skipStr "//")` on `"// c"` returns `true` and leaves `" c"`.
+On `"/x"` it returns `false` and leaves `"/x"`.
 -/
 def tried (p : Parse ι α) : Parse ι Bool :=
   (do
