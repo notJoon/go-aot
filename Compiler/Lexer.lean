@@ -91,48 +91,6 @@ private def scanDone {s : String} (pos : s.Pos) (value : α) : ScanResult α :=
 private def scanFailed {s : String} (pos : s.Pos) (error : Parser.Error) : ScanResult α :=
   .err ⟨s, pos⟩ error
 
-def offset : P Nat := fun it => .ok it it.2.offset.byteIdx
-
-def skipStr (s : String) : P Unit := fun it =>
-  if (it.1.sliceFrom it.2).startsWith s then
-    .ok ⟨it.1, it.2.nextn s.length⟩ ()
-  else
-    .err it (.other s!"expected '{s}'")
-
-@[inline]
-def peekIs (pred : Char → Bool) : P Bool := fun it =>
-  if h : ¬it.2.IsAtEnd then .ok it (pred (it.2.get h)) else .ok it false
-
-/-- Consume the next character when it satisfies `pred`, reporting whether it was there. -/
-@[inline]
-def skipIf (pred : Char → Bool) : P Bool := fun it =>
-  if h : ¬it.2.IsAtEnd then
-    if pred (it.2.get h) then .ok ⟨it.1, it.2.next h⟩ true else .ok it false
-  else
-    .ok it false
-
-def expect (c : Char) (what : String) : P Unit := do
-  unless (← skipIf (· == c)) do fail s!"expected {what}"
-
-/-- Success consumes input; use `lookAhead` as well when only testing a prefix. -/
-def tried (p : P α) : P Bool :=
-  (do
-    let _ ← attempt p
-    return true) <|> pure false
-
-@[specialize]
-private def skipWhilePos {s : String} (pos : s.Pos) (pred : Char → Bool) : s.Pos :=
-  if h : ¬pos.IsAtEnd then
-    if pred (pos.get h) then skipWhilePos (pos.next h) pred else pos
-  else
-    pos
-termination_by pos
-
-/-- Discard characters without allocating an array of them. -/
-@[inline]
-def skipWhile (pred : Char → Bool) : P Unit := fun it =>
-  .ok ⟨it.1, skipWhilePos it.2 pred⟩ ()
-
 /-! ## Trivia -/
 
 def isSpace (c : Char) : Bool := c == ' ' || c == '\t' || c == '\r' || c == '\n'

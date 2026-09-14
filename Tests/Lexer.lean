@@ -53,7 +53,7 @@ private def checkConstantAllocations (label : String) (p : Lex.P α) (short long
 private def lexMain : IO Unit := do
   let chars (c : Char) (n : Nat) := String.ofList (List.replicate n c)
   let copies (s : String) (n : Nat) := String.join (List.replicate n s)
-  checkConstantAllocations "whitespace" (Lex.skipWhile Lex.isSpace) (chars ' ' 8) (chars ' ' 10000)
+  checkConstantAllocations "whitespace" (Parser.skipWhile Lex.isSpace) (chars ' ' 8) (chars ' ' 10000)
   checkConstantAllocations "block comment" Lex.blockCommentBody
     (copies "*a" 4 ++ "*/") (copies "*a" 5000 ++ "*/")
   checkConstantAllocations "digits" (Lex.digitSeq Char.isDigit)
