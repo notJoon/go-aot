@@ -113,9 +113,11 @@ private def builderError : Diagnostic :=
 private def Builder.newBlock (builder : Builder) : IR.BlockId × Builder :=
   (builder.blocks.size, { builder with blocks := builder.blocks.push {} })
 
+-- A closed path has no current block, so emitting there is a no-op rather than an error.
+-- Keeping that rule here means statement lowering never repeats the reachability test.
 private def Builder.emit (builder : Builder) (instruction : IR.Instruction) :
     Except Diagnostic Builder := do
-  let some current := builder.current | throw builderError
+  let some current := builder.current | return builder
   let some block := builder.blocks[current]? | throw builderError
   if block.terminator.isSome then throw builderError
   let blocks := builder.blocks.set! current { block with instructions := block.instructions.push instruction }
@@ -123,7 +125,7 @@ private def Builder.emit (builder : Builder) (instruction : IR.Instruction) :
 
 private def Builder.terminate (builder : Builder) (terminator : IR.Terminator) :
     Except Diagnostic Builder := do
-  let some current := builder.current | throw builderError
+  let some current := builder.current | return builder
   let some block := builder.blocks[current]? | throw builderError
   if block.terminator.isSome then throw builderError
   return { builder with
@@ -144,7 +146,9 @@ private def Builder.finish (builder : Builder) : Except Diagnostic (Array IR.Blo
 
 private def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → IR.Instruction) :
     Except Diagnostic (IR.Operand × Builder) := do
-  -- Dead source still checks kinds, but its placeholder never enters the live CFG.
+  -- Unlike emit, this cannot delegate: a closed path must not consume a value id, and
+  -- returning `.value` would name a definition that never exists. Dead source still checks
+  -- kinds, but the placeholder is discarded by emit and never enters the live CFG.
   if builder.current.isNone then return (.literal 0, builder)
   let id := builder.nextValue
   let builder ← builder.emit (instruction id)
@@ -208,13 +212,13 @@ mutual
           let (value, kind, builder) ← lowerOperand all signature.parameters builder argument
           unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
           pure (.printInt value, builder)
-      if builder.current.isSome then builder.emit instruction else pure builder
+      builder.emit instruction
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
       let (operand, kind, builder) ← lowerOperand all signature.parameters builder value
       unless kind == .int do throw (diagnosticAt value.span "return value must be int")
-      if builder.current.isSome then builder.terminate (.ret (some operand)) else pure builder
+      builder.terminate (.ret (some operand))
     | .ifThen condition body => do
       let (operand, kind, builder) ← lowerOperand all signature.parameters builder condition
       unless kind == .bool do throw (diagnosticAt condition.span "if condition must be bool")
@@ -225,7 +229,7 @@ mutual
       let builder ← builder.terminate (.condBr operand thenBlock continuation)
       let builder ← builder.selectBlock thenBlock
       let builder ← lowerStatements all signature builder body
-      let builder ← if builder.current.isSome then builder.terminate (.br continuation) else pure builder
+      let builder ← builder.terminate (.br continuation)
       builder.selectBlock continuation
 
   private partial def lowerStatements (all : Array Signature) (signature : Signature)
@@ -254,9 +258,9 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
       match function.body.back? with
       | some (.return _) => pure ()
       | _ => throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
-    let builder ← if builder.current.isSome then
-        if signature.returnsInt then throw builderError else builder.terminate (.ret none)
-      else pure builder
+    -- An int function's body ends with return, so its last block is already closed;
+    -- leaving one open here fails Builder.finish.
+    let builder ← if signature.returnsInt then pure builder else builder.terminate (.ret none)
     let blocks ← builder.finish
     functions := functions.push ⟨signature.name, signature.parameters,
       if signature.returnsInt then .int else .void, blocks⟩
