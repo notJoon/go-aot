@@ -3,6 +3,7 @@ module
 public import Compiler.Diagnostic
 public import Compiler.Parser.Parser
 public import Compiler.Parser.String
+import Compiler.Literal
 import Compiler.Unicode
 
 public section
@@ -76,6 +77,7 @@ instance : Parser.Iterator TokenIterator Token Nat where
 namespace Lex
 
 open Parser
+open Literal
 
 abbrev P := StringParse
 
@@ -222,11 +224,6 @@ def identifier : P TokenKind := fun it =>
 
 /-! ## Numeric literals -/
 
-def isBinDigit (c : Char) : Bool := c == '0' || c == '1'
-def isOctDigit (c : Char) : Bool := '0' ≤ c && c ≤ '7'
-def isHexDigit (c : Char) : Bool :=
-  c.isDigit || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')
-
 /-- One or more digits, with `_` allowed only between two digits. -/
 @[specialize]
 private def scanDigitSeq {s : String} (pos : s.Pos) (pred : Char → Bool) : ScanResult Unit :=
@@ -344,44 +341,6 @@ def number : P TokenKind := do
 
 /-! ## Rune and string literals -/
 
-@[inline]
-private def digitValue (c : Char) : Nat :=
-  if c.isDigit then c.toNat - '0'.toNat else c.toLower.toNat - 'a'.toNat + 10
-
-/--
-A numeric escape's radix, digit width, and completion rule.
--/
-private inductive EscapeKind where
-  | hexByte | unicode4 | unicode8 | octal
-
-@[inline]
-private def EscapeKind.base : EscapeKind → Nat
-  | .octal => 8
-  | .hexByte | .unicode4 | .unicode8 => 16
-
-@[inline]
-private def EscapeKind.width : EscapeKind → Nat
-  | .hexByte => 2
-  | .unicode4 => 4
-  | .unicode8 => 8
-  | .octal => 3
-
-@[inline]
-private def EscapeKind.accepts : EscapeKind → Char → Bool
-  | .octal, c => isOctDigit c
-  | .hexByte, c | .unicode4, c | .unicode8, c => isHexDigit c
-
-@[inline]
-private def isUnicodeScalar (value : Nat) : Bool :=
-  decide value.isValidChar
-
-private def EscapeKind.completionError? (kind : EscapeKind) (value : Nat) : Option String :=
-  match kind with
-  | .octal => if value < UInt8.size then none else some "octal escape exceeds 255"
-  | .unicode4 | .unicode8 =>
-    if isUnicodeScalar value then none else some "escape is not a Unicode scalar value"
-  | .hexByte => none
-
 private def scanEscapeDigits {s : String} (pos : s.Pos) (kind : EscapeKind)
     (remaining value : Nat) :
     ScanResult Nat :=
@@ -418,7 +377,7 @@ def escape (quote : Char) : P Unit := do
   else if isOctDigit c then
     let value ← escapeDigits .octal (EscapeKind.octal.width - 1) (c.toNat - '0'.toNat)
     if let some error := EscapeKind.octal.completionError? value then fail error
-  else unless "abfnrtv\\".any (· == c) || c == quote do fail s!"unknown escape sequence: \\{c}"
+  else unless (simpleEscape? c).isSome || c == quote do fail s!"unknown escape sequence: \\{c}"
 
 def runeLiteral : P TokenKind := do
   skip
@@ -447,7 +406,7 @@ private def InterpretedState.afterEscape? (escaped : Char) : Option InterpretedS
   | 'u' => some .unicode4
   | 'U' => some .unicode8
   | c =>
-    if "abfnrtv\\\"".any (· == c) then some .normal
+    if (simpleEscape? c).isSome || c == '"' then some .normal
     else none
 
 -- The secondary termination measure permits dispatch to a digit state before the position advances.

@@ -2,6 +2,7 @@ module
 
 public import Compiler.IR
 public import Compiler.Parser.Go
+import Compiler.Literal
 
 public section
 
@@ -42,59 +43,11 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature
 private def findSignature? (all : Array Signature) (name : String) : Option Signature :=
   all.find? fun signature => signature.name == name
 
-private def digitValue (radix : Nat) (c : Char) : Option Nat :=
-  let value :=
-    if '0' <= c && c <= '9' then some (c.toNat - '0'.toNat)
-    else if 'a' <= c && c <= 'f' then some (c.toNat - 'a'.toNat + 10)
-    else if 'A' <= c && c <= 'F' then some (c.toNat - 'A'.toNat + 10)
-    else none
-  value.filter (· < radix)
-
-private def takeDigits (span : Span) (radix : Nat) : Nat → List Char → Except Diagnostic (Nat × List Char)
-  | 0, rest => return (0, rest)
-  | count + 1, c :: rest => do
-    let some digit := digitValue radix c | throw (diagnosticAt span "invalid string escape")
-    let (tail, rest) ← takeDigits span radix count rest
-    return (digit * radix ^ count + tail, rest)
-  | _, [] => throw (diagnosticAt span "incomplete string escape")
-
-private def pushChar (bytes : ByteArray) (c : Char) : ByteArray := Id.run do
-  let mut result := bytes
-  for byte in (String.singleton c).toUTF8 do result := result.push byte
-  return result
-
--- Decode source escapes once at the semantic boundary so backends never reinterpret Go syntax.
-private partial def decodeStringChars (span : Span) (chars : List Char) (bytes : ByteArray) :
-    Except Diagnostic ByteArray := do
-  match chars with
-  | [] => return bytes
-  | '\\' :: escaped :: rest =>
-    let simple? := match escaped with
-      | 'a' => some 7 | 'b' => some 8 | 'f' => some 12 | 'n' => some 10
-      | 'r' => some 13 | 't' => some 9 | 'v' => some 11
-      | '\\' => some 92 | '"' => some 34
-      | _ => none
-    if let some byte := simple? then
-      decodeStringChars span rest (bytes.push byte.toUInt8)
-    else if escaped == 'x' then
-      let (value, rest) ← takeDigits span 16 2 rest
-      decodeStringChars span rest (bytes.push value.toUInt8)
-    else if escaped == 'u' || escaped == 'U' then
-      let (value, rest) ← takeDigits span 16 (if escaped == 'u' then 4 else 8) rest
-      decodeStringChars span rest (pushChar bytes (Char.ofNat value))
-    else if '0' <= escaped && escaped <= '7' then
-      let (tail, rest) ← takeDigits span 8 2 rest
-      decodeStringChars span rest (bytes.push ((escaped.toNat - '0'.toNat) * 64 + tail).toUInt8)
-    else
-      throw (diagnosticAt span "invalid string escape")
-  | '\\' :: [] => throw (diagnosticAt span "incomplete string escape")
-  | c :: rest => decodeStringChars span rest (pushChar bytes c)
-
 private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray := do
   match literal.toList with
   | '"' :: rest =>
     match rest.reverse with
-    | '"' :: reversed => decodeStringChars span reversed.reverse ByteArray.empty
+    | '"' :: reversed => (Literal.decodeInterpreted reversed.reverse).mapError (diagnosticAt span)
     | _ => throw (diagnosticAt span "unterminated string literal")
   | _ => throw (diagnosticAt span "raw string literals are not supported yet")
 
