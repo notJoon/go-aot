@@ -2,7 +2,21 @@ name: Lean Action CI
 
 on:
   push:
+    paths:
+      - '**.lean'
+      - 'Tests/**'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - 'lean-toolchain'
+      - '.github/workflows/lean_action_ci.yml'
   pull_request:
+    paths:
+      - '**.lean'
+      - 'Tests/**'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - 'lean-toolchain'
+      - '.github/workflows/lean_action_ci.yml'
   workflow_dispatch:
 
 jobs:
