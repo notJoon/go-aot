@@ -107,6 +107,11 @@ private def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → 
   let builder ← builder.emit (instruction id)
   return (.value id, { builder with nextValue := id + 1 })
 
+-- A local shadows every function of the same name, including println, as in Go.
+private def checkCallable (locals : Array String) (callee : Syntax.Ident) : Except Diagnostic Unit := do
+  if locals.contains callee.text then
+    throw (diagnosticAt callee.span s!"cannot call non-function '{callee.text}'")
+
 private partial def lowerOperand (all : Array Signature) (locals : Array String)
     (builder : Builder) : Syntax.Expr → Except Diagnostic (IR.Operand × IR.ValueKind × Builder)
   | .intLiteral text span =>
@@ -121,6 +126,7 @@ private partial def lowerOperand (all : Array Signature) (locals : Array String)
       | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
     return (.argument index, .int, builder)
   | .call callee arguments span => do
+    checkCallable locals callee
     let some signature := findSignature? all callee.text
       | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
     unless signature.returnsInt do
@@ -153,6 +159,7 @@ mutual
   private partial def lowerStatement (all : Array Signature) (signature : Signature)
       (builder : Builder) : Syntax.Stmt → Except Diagnostic Builder
     | .expr (.call callee arguments span) => do
+      checkCallable signature.parameters callee
       if callee.text != "println" then
         throw (diagnosticAt callee.span "only println calls may be used as statements")
       let some argument := arguments[0]?

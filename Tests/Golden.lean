@@ -196,7 +196,13 @@ def goldenMain : IO Unit := do
       ("package main\nfunc main() { if 1 { println(2) } }\n", "2:18: if condition must be bool"),
       ("package main\nfunc f(n int) int { return n }\nfunc main() { println(f(1 < 2)) }\n",
         "3:25: function arguments must be int"),
-      ("package main\nfunc main() { println(missing) }\n", "2:23: unknown identifier 'missing'")] do
+      ("package main\nfunc main() { println(missing) }\n", "2:23: unknown identifier 'missing'"),
+      ("package main\nfunc g(x int) int { return x }\nfunc f(g int) int { return g(g) }\nfunc main() {}\n",
+        "3:28: cannot call non-function 'g'"),
+      ("package main\nfunc f(println int) int { println(1); return 1 }\nfunc main() {}\n",
+        "2:27: cannot call non-function 'println'"),
+      ("package main\nfunc f(g int) int { g(1); return 1 }\nfunc main() {}\n",
+        "2:21: cannot call non-function 'g'")] do
     checkSameRejection source
     check (match compileToC (Source.ofString source) with
       | .error diagnostic => diagnostic.render (Source.ofString source) == expected
