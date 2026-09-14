@@ -110,7 +110,7 @@ private def checkDifferential (name : String) : IO Unit := do
   let expected ← IO.FS.readFile (path ++ ".out.golden")
   let .ok c := compileToC source | throw (IO.userError s!"C rejected {name}")
   let .ok llvm := compileToLLVM source | throw (IO.userError s!"LLVM rejected {name}")
-  let cOutput ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11"] c
+  let cOutput ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11", "-pedantic-errors"] c
   let llvmOutput ← runGenerated (← clangCommand) "ir" llvmOptions llvm
   check (cOutput.exitCode == llvmOutput.exitCode) s!"backend exit codes differ: {name}"
   check (cOutput.stdout == llvmOutput.stdout) s!"backend stdout differs: {name}"
