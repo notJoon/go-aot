@@ -1,5 +1,27 @@
 # GoAot
 
+## Why did I start this?
+
+Just for fun. Honestly, using Lean probably does not make this project any better. Rust or OCaml would be a better choice.
+
+## Goals and non-goals
+
+I do not intend to implement all of Go, so the goals and non-goals of this project are:
+
+### Goals
+
+1. Integers, strings, slices, structs, pointers, functions, methods, and interfaces
+2. Closures, `defer`, `panic`, and `recover`
+3. Goroutines and channels, with `select` being optional
+4. Only a tiny, hand-written standard library, such as `fmt.Println` and a few other functions. `import` will either be unsupported or limited to built-in packages
+5. The project is considered successful if around five benchmark programs produce the same results as `gc`
+
+### Non-goals
+
+Generics, reflection, `cgo`, randomized map iteration, a complete implementation of `select`, precise garbage collection, and so on.
+
+I may change my mind and implement some of these later, but they are not goals for now.
+
 ## Structure
 
 ![Structure](structure_adr.JPG)
