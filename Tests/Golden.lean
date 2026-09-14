@@ -1,5 +1,8 @@
 import GoAot
 import Compiler.Parser.Go
+import Compiler.IR.Verify
+import Compiler.Backend.C
+import Compiler.Backend.LLVM
 
 open GoAot
 
@@ -107,7 +110,7 @@ private def checkDifferential (name : String) : IO Unit := do
   let expected ← IO.FS.readFile (path ++ ".out.golden")
   let .ok c := compileToC source | throw (IO.userError s!"C rejected {name}")
   let .ok llvm := compileToLLVM source | throw (IO.userError s!"LLVM rejected {name}")
-  let cOutput ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11"] c
+  let cOutput ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11", "-pedantic-errors"] c
   let llvmOutput ← runGenerated (← clangCommand) "ir" llvmOptions llvm
   check (cOutput.exitCode == llvmOutput.exitCode) s!"backend exit codes differ: {name}"
   check (cOutput.stdout == llvmOutput.stdout) s!"backend stdout differs: {name}"
@@ -137,6 +140,27 @@ private def checkInvalidSSARejected : IO Unit := do
     }
     check (result.exitCode != 0) "LLVM verifier accepted invalid SSA"
 
+private def checkDirectCFG : IO Unit := do
+  let program : IR.Program := ⟨#[
+    ⟨"main", #[], .void, #[⟨#[.call 0 "walk" #[], .printInt (.value 0)], .ret none⟩]⟩,
+    ⟨"walk", #[], .int, #[
+      ⟨#[], .br 2⟩,
+      ⟨#[.printInt (.literal 11)], .ret (some (.literal 7))⟩,
+      ⟨#[.binary 0 .less (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
+      ⟨#[], .br 3⟩]⟩]⟩
+  let .ok () := IR.verify program | throw (IO.userError "valid cyclic CFG rejected")
+  let c ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11", "-pedantic-errors"] (Backend.C.emit program)
+  let llvm ← runGenerated (← clangCommand) "ir" llvmOptions (Backend.LLVM.emit program)
+  check (c.exitCode == 0 && llvm.exitCode == 0 && c.stdout == "11\n7\n" && c.stdout == llvm.stdout)
+    "direct CFG did not follow backward/conditional edges"
+  let source := Source.ofString "package main\nfunc main() {}\n"
+  let .ok c := compileToC source | throw (IO.userError "empty main rejected by C")
+  let .ok llvm := compileToLLVM source | throw (IO.userError "empty main rejected by LLVM")
+  let c ← runGenerated (← ccCommand) "c" #["-std=c11", "-pedantic-errors"] c
+  let llvm ← runGenerated (← clangCommand) "ir" llvmOptions llvm
+  check (c.exitCode == 0 && llvm.exitCode == 0 && c.stdout.isEmpty && llvm.stdout.isEmpty)
+    "empty main did not return successfully"
+
 def goldenMain : IO Unit := do
   checkGolden "minimal"
   checkGolden "invalid"
@@ -157,6 +181,8 @@ def goldenMain : IO Unit := do
   checkDifferential "generic_if"
   checkDifferential "semantics"
   checkDifferential "strings"
+  checkDifferential "cfg"
+  checkDirectCFG
   checkNulString
   checkInvalidSSARejected
   checkSameRejection "package main\nfunc main() { println(missing()) }\n"

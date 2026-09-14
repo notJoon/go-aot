@@ -4,20 +4,27 @@
 static int64_t go_fib(int64_t go_n);
 
 static int64_t go_fib(int64_t go_n) {
-  int64_t go_tmp_0 = go_n < 2;
-  if (go_tmp_0) {
+  bb0: {
+    int64_t go_tmp_0 = go_n < 2;
+    if (go_tmp_0) goto bb1; else goto bb2;
+  }
+  bb1: {
     return go_n;
   }
-  int64_t go_tmp_1 = go_n - 1;
-  int64_t go_tmp_2 = go_fib(go_tmp_1);
-  int64_t go_tmp_3 = go_n - 2;
-  int64_t go_tmp_4 = go_fib(go_tmp_3);
-  int64_t go_tmp_5 = go_tmp_2 + go_tmp_4;
-  return go_tmp_5;
+  bb2: {
+    int64_t go_tmp_1 = go_n - 1;
+    int64_t go_tmp_2 = go_fib(go_tmp_1);
+    int64_t go_tmp_3 = go_n - 2;
+    int64_t go_tmp_4 = go_fib(go_tmp_3);
+    int64_t go_tmp_5 = go_tmp_2 + go_tmp_4;
+    return go_tmp_5;
+  }
 }
 
 int main(void) {
-  int64_t go_tmp_0 = go_fib(10);
-  printf("%lld\n", (long long)go_tmp_0);
-  return 0;
+  bb0: {
+    int64_t go_tmp_0 = go_fib(10);
+    printf("%lld\n", (long long)go_tmp_0);
+    return 0;
+  }
 }

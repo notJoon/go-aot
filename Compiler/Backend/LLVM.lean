@@ -10,21 +10,18 @@ private def llvmName (name : String) : String :=
   if name == "main" then name else "go_" ++ name
 
 -- Collect declarations and deduplicate string globals before any function is emitted.
-private partial def collectRuntimeNeeds (instructions : Array IR.Instruction) :
+private def collectRuntimeNeeds (program : IR.Program) :
     Array ByteArray × Bool := Id.run do
   let mut result := #[]
   let mut needsIntFormat := false
-  for instruction in instructions do
-    match instruction with
-    | .printString bytes =>
-      unless result.contains bytes do result := result.push bytes
-    | .printInt _ => needsIntFormat := true
-    | .ifThen _ body =>
-      let (strings, nestedNeedsIntFormat) := collectRuntimeNeeds body
-      for bytes in strings do
-        unless result.contains bytes do result := result.push bytes
-      needsIntFormat := needsIntFormat || nestedNeedsIntFormat
-    | _ => pure ()
+  for function in program.functions do
+    for block in function.blocks do
+      for instruction in block.instructions do
+        match instruction with
+        | .printString bytes =>
+          unless result.contains bytes do result := result.push bytes
+        | .printInt _ => needsIntFormat := true
+        | .binary .. | .call .. => pure ()
   return (result, needsIntFormat)
 
 private def hexDigit : Nat → String
@@ -42,94 +39,60 @@ private def escapeByte (byte : UInt8) : String :=
 private def emitBytes (bytes : ByteArray) : String :=
   String.join (bytes.toList.map escapeByte)
 
--- Recursive emission follows source order and gives each computed value a fresh SSA name.
-private partial def emitExpr (output : Array String) (nextValue : Nat) :
-    IR.IntExpr → Array String × String × Nat
-  | .literal value => (output, toString value, nextValue)
-  | .argument index => (output, s!"%arg{index}", nextValue)
-  | .call name arguments => Id.run do
-    let mut output := output
-    let mut values := #[]
-    let mut next := nextValue
-    for argument in arguments do
-      let (after, value, afterValue) := emitExpr output next argument
-      output := after
-      values := values.push ("i64 " ++ value)
-      next := afterValue
-    let result := s!"%v{next}"
-    return (output.push (s!"  {result} = call i64 @{llvmName name}(" ++
-      String.intercalate ", " values.toList ++ ")\n"), result, next + 1)
-  | expression@(.add left right) | expression@(.subtract left right) =>
-    let (output, leftValue, next) := emitExpr output nextValue left
-    let (output, rightValue, next) := emitExpr output next right
-    let result := s!"%v{next}"
-    let operation := match expression with | .add .. => "add i64" | _ => "sub i64"
-    (output.push s!"  {result} = {operation} {leftValue}, {rightValue}\n", result, next + 1)
+private def operand : IR.Operand → String
+  | .value id => s!"%v{id}"
+  | .literal value => toString value
+  | .argument index => s!"%arg{index}"
 
-private def emitBoolExpr (output : Array String) (nextValue : Nat) :
-    IR.BoolExpr → Array String × String × Nat
-  | .less left right =>
-    let (output, leftValue, next) := emitExpr output nextValue left
-    let (output, rightValue, next) := emitExpr output next right
-    let result := s!"%v{next}"
-    (output.push s!"  {result} = icmp slt i64 {leftValue}, {rightValue}\n", result, next + 1)
-
--- The final flag records whether the current block already owns its required terminator.
-private partial def emitInstructions (strings : Array ByteArray)
-    (instructions : Array IR.Instruction) (output : Array String)
-    (nextValue nextBlock : Nat) : Array String × Nat × Nat × Bool := Id.run do
+private def emitInstructions (strings : Array ByteArray)
+    (instructions : Array IR.Instruction) (output : Array String) : Array String := Id.run do
   let mut output := output
-  let mut value := nextValue
-  let mut block := nextBlock
-  let mut terminated := false
   for instruction in instructions do
-    unless terminated do
-      match instruction with
-      | .printString bytes =>
-        let index := strings.idxOf bytes
-        output := output.push s!"  call void @goaot.print_line(ptr @.str.{index}, i64 {bytes.size})\n"
-      | .printInt expression =>
-        let (after, result, next) := emitExpr output value expression
-        output := after.push s!"  call i32 (ptr, ...) @printf(ptr @.int_format, i64 {result})\n"
-        value := next
-      | .return expression =>
-        let (after, result, next) := emitExpr output value expression
-        output := after.push s!"  ret i64 {result}\n"
-        value := next
-        terminated := true
-      | .ifThen condition body =>
-        let (after, conditionValue, next) := emitBoolExpr output value condition
-        let label := block
-        let (after, afterValue, afterBlock, bodyTerminated) :=
-          emitInstructions strings body (after.push
-            (s!"  br i1 {conditionValue}, label %if.then.{label}, label %if.end.{label}\n\n" ++
-              s!"if.then.{label}:\n")) next (block + 1)
-        output := after
-        unless bodyTerminated do output := output.push s!"  br label %if.end.{label}\n"
-        output := output.push s!"\nif.end.{label}:\n"
-        value := afterValue
-        block := afterBlock
-  return (output, value, block, terminated)
+    match instruction with
+    | .binary id op left right =>
+      let operation := match op with
+        | .add => "add i64" | .subtract => "sub i64" | .less => "icmp slt i64"
+      output := output.push s!"  %v{id} = {operation} {operand left}, {operand right}\n"
+    | .call id name arguments =>
+      let values := arguments.toList.map fun value => "i64 " ++ operand value
+      output := output.push (s!"  %v{id} = call i64 @{llvmName name}(" ++
+        String.intercalate ", " values ++ ")\n")
+    | .printString bytes =>
+      let index := strings.idxOf bytes
+      output := output.push s!"  call void @goaot.print_line(ptr @.str.{index}, i64 {bytes.size})\n"
+    | .printInt value =>
+      output := output.push s!"  call i32 (ptr, ...) @printf(ptr @.int_format, i64 {operand value})\n"
+  return output
+
+private def resultType (function : IR.Function) : String :=
+  match function.returnKind with
+  | .int => "i64"
+  | .void => if function.name == "main" then "i32" else "void"
+
+private def emitTerminator (function : IR.Function) : IR.Terminator → String
+  | .br target => s!"  br label %bb{target}\n"
+  | .condBr condition ifTrue ifFalse =>
+    s!"  br i1 {operand condition}, label %bb{ifTrue}, label %bb{ifFalse}\n"
+  | .ret none =>
+    if function.returnKind == .void && function.name != "main" then "  ret void\n"
+    else s!"  ret {resultType function} 0\n"
+  | .ret (some value) => s!"  ret {resultType function} {operand value}\n"
 
 private def emitFunction (strings : Array ByteArray) (output : Array String)
-    (function : IR.Function) : Array String :=
+    (function : IR.Function) : Array String := Id.run do
   let parameters := function.parameters.mapIdx fun index _ => s!"i64 %arg{index}"
   let linkage := if function.name == "main" then "" else "internal "
-  let resultType := if function.name == "main" then "i32" else "i64"
-  let output := output.push (s!"define {linkage}{resultType} @{llvmName function.name}(" ++
-    String.intercalate ", " parameters.toList ++ ") {\nentry:\n")
-  let (output, _, _, _) := emitInstructions strings function.body output 0 0
-  (if function.name == "main" then output.push "  ret i32 0\n" else output).push "}\n"
+  let mut output := output.push (s!"define {linkage}{resultType function} @{llvmName function.name}(" ++
+    String.intercalate ", " parameters.toList ++ ") {\n")
+  for h : index in [:function.blocks.size] do
+    let block := function.blocks[index]
+    output := output.push ((if index == 0 then "" else "\n") ++ s!"bb{index}:\n")
+    output := (emitInstructions strings block.instructions output).push
+      (emitTerminator function block.terminator)
+  return output.push "}\n"
 
--- Like the C backend, consumes programs validated by Lowering.
 def emit (program : IR.Program) : String := Id.run do
-  let mut strings := #[]
-  let mut needsIntFormat := false
-  for function in program.functions do
-    let (foundStrings, foundNeedsIntFormat) := collectRuntimeNeeds function.body
-    for bytes in foundStrings do
-      unless strings.contains bytes do strings := strings.push bytes
-    needsIntFormat := needsIntFormat || foundNeedsIntFormat
+  let (strings, needsIntFormat) := collectRuntimeNeeds program
 
   let mut output : Array String := #[]
   for i in [:strings.size] do

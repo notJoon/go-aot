@@ -26,4 +26,8 @@ func odd(n int) int {
 func main() {
     println(combine(mark(1), mark(2), mark(3)))
     println(even(10) + odd(10))
+    println(mark(4) - mark(5) + mark(6))
+    if mark(7) + mark(8) < mark(9) + mark(10) {
+        println(11)
+    }
 }

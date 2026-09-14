@@ -17,39 +17,10 @@ private def emitParameters (parameters : Array String) : String := Id.run do
     result := result ++ "int64_t go_" ++ parameter
   return result
 
--- Named temporaries preserve Go evaluation order because C leaves operand and argument order unspecified.
-private partial def emitExpr (parameters : Array String) (indent : String) (nextTemp : Nat) :
-    IR.IntExpr → String × String × Nat
-  | .literal value => ("", toString value, nextTemp)
-  | .argument index => ("", "go_" ++ parameters[index]!, nextTemp)
-  | .call name arguments => Id.run do
-    let mut output := ""
-    let mut values := #[]
-    let mut next := nextTemp
-    for argument in arguments do
-      let (code, value, after) := emitExpr parameters indent next argument
-      output := output ++ code
-      values := values.push value
-      next := after
-    let result := s!"go_tmp_{next}"
-    return (output ++ indent ++ s!"int64_t {result} = {cName name}(" ++
-      String.intercalate ", " values.toList ++ ");\n", result, next + 1)
-  | expression@(.add left right) | expression@(.subtract left right) =>
-    let (leftCode, leftValue, next) := emitExpr parameters indent nextTemp left
-    let (rightCode, rightValue, next) := emitExpr parameters indent next right
-    let result := s!"go_tmp_{next}"
-    let symbol := match expression with | .add .. => "+" | _ => "-"
-    (leftCode ++ rightCode ++ indent ++
-      s!"int64_t {result} = {leftValue} {symbol} {rightValue};\n", result, next + 1)
-
-private def emitBoolExpr (parameters : Array String) (indent : String) (nextTemp : Nat) :
-    IR.BoolExpr → String × String × Nat
-  | .less left right =>
-    let (leftCode, leftValue, next) := emitExpr parameters indent nextTemp left
-    let (rightCode, rightValue, next) := emitExpr parameters indent next right
-    let result := s!"go_tmp_{next}"
-    (leftCode ++ rightCode ++ indent ++
-      s!"int64_t {result} = {leftValue} < {rightValue};\n", result, next + 1)
+private def operand (parameters : Array String) : IR.Operand → String
+  | .value id => s!"go_tmp_{id}"
+  | .literal value => toString value
+  | .argument index => "go_" ++ parameters[index]!
 
 private def hexDigit : Nat → String
   | 0 => "0" | 1 => "1" | 2 => "2" | 3 => "3" | 4 => "4" | 5 => "5"
@@ -64,36 +35,38 @@ private def emitBytes (bytes : ByteArray) : String := Id.run do
   return result
 
 -- Explicit byte counts preserve embedded NUL values during string output.
-private partial def emitInstructions (parameters : Array String)
-    (instructions : Array IR.Instruction) (indent : String)
-    (nextTemp : Nat) : String × Nat :=
-  Id.run do
-    let mut result := ""
-    let mut next := nextTemp
-    for instruction in instructions do
-      match instruction with
-      | .printString bytes => result := result ++ indent ++ "fwrite(\"" ++ emitBytes bytes ++
-          s!"\", 1, {bytes.size}, stdout); putchar('\\n');\n"
-      | .printInt expression =>
-        let (code, value, after) := emitExpr parameters indent next expression
-        result := result ++ code ++ indent ++
-          "printf(\"%lld\\n\", (long long)" ++ value ++ ");\n"
-        next := after
-      | .return expression =>
-        let (code, value, after) := emitExpr parameters indent next expression
-        result := result ++ code ++ indent ++ "return " ++ value ++ ";\n"
-        next := after
-      | .ifThen condition body =>
-        let (conditionCode, conditionValue, afterCondition) :=
-          emitBoolExpr parameters indent next condition
-        let (body, afterBody) := emitInstructions parameters body (indent ++ "  ") afterCondition
-        result := result ++ conditionCode ++ indent ++ "if (" ++ conditionValue ++ ") {\n" ++
-          body ++ indent ++ "}\n"
-        next := afterBody
-    return (result, next)
+private def emitInstructions (parameters : Array String)
+    (instructions : Array IR.Instruction) (indent : String) : String := Id.run do
+  let mut result := ""
+  for instruction in instructions do
+    match instruction with
+    | .binary id op left right =>
+      let symbol := match op with | .add => "+" | .subtract => "-" | .less => "<"
+      result := result ++ indent ++
+        s!"int64_t go_tmp_{id} = {operand parameters left} {symbol} {operand parameters right};\n"
+    | .call id name arguments =>
+      result := result ++ indent ++ s!"int64_t go_tmp_{id} = {cName name}(" ++
+        String.intercalate ", " (arguments.toList.map (operand parameters)) ++ ");\n"
+    | .printString bytes => result := result ++ indent ++ "fwrite(\"" ++ emitBytes bytes ++
+        s!"\", 1, {bytes.size}, stdout); putchar('\\n');\n"
+    | .printInt value =>
+      result := result ++ indent ++
+        "printf(\"%lld\\n\", (long long)" ++ operand parameters value ++ ");\n"
+  return result
+
+private def emitTerminator (function : IR.Function) : IR.Terminator → String
+  | .br target => s!"    goto bb{target};\n"
+  | .condBr condition ifTrue ifFalse =>
+    s!"    if ({operand function.parameters condition}) goto bb{ifTrue}; else goto bb{ifFalse};\n"
+  | .ret none =>
+    if function.returnKind == .void && function.name != "main" then "    return;\n"
+    else "    return 0;\n"
+  | .ret (some value) => s!"    return {operand function.parameters value};\n"
 
 private def emitHeader (function : IR.Function) : String :=
-  let result := if function.name == "main" then "int" else "int64_t"
+  let result := match function.returnKind with
+    | .int => "int64_t"
+    | .void => if function.name == "main" then "int" else "void"
   result ++ " " ++ cName function.name ++ "(" ++ emitParameters function.parameters ++ ")"
 
 def emit (program : IR.Program) : String := Id.run do
@@ -106,10 +79,13 @@ def emit (program : IR.Program) : String := Id.run do
       hasPrototype := true
   output := output ++ "\n"
   for function in program.functions do
-    let (body, _) := emitInstructions function.parameters function.body "  " 0
     output := output ++ "\n" ++ (if function.name == "main" then "" else "static ") ++
-      emitHeader function ++ " {\n" ++ body
-    if function.name == "main" then output := output ++ "  return 0;\n"
+      emitHeader function ++ " {\n"
+    for h : index in [:function.blocks.size] do
+      let block := function.blocks[index]
+      let body := emitInstructions function.parameters block.instructions "    "
+      let terminator := emitTerminator function block.terminator
+      output := output ++ s!"  bb{index}: " ++ "{\n" ++ body ++ terminator ++ "  }\n"
     output := output ++ "}\n"
   return output
 

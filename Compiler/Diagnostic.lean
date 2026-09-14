@@ -7,7 +7,7 @@ public section
 namespace GoAot
 
 inductive Phase where
-  | lexer | parser | lowering | cBackend | llvmBackend
+  | lexer | parser | lowering | ir | cBackend | llvmBackend
   deriving Repr, BEq, Inhabited
 
 structure Diagnostic where
