@@ -243,17 +243,19 @@ private def digits : Array (Nat × Nat × Nat) := #[
   (0x1fbf0, 0x1fbf9, 1)
 ]
 
-private def contains (ranges : Array (Nat × Nat × Nat)) (c : Char) : Bool := Id.run do
+-- Recursion keeps the search allocation free. A do-block loop allocates its state on every step.
+private def contains (ranges : Array (Nat × Nat × Nat)) (c : Char) : Bool :=
   let n := c.toNat
-  let mut lo := 0
-  let mut hi := ranges.size
-  while lo < hi do
-    let mid := (lo + hi) / 2
-    let (first, last, stride) := ranges[mid]!
-    if n < first then hi := mid
-    else if n > last then lo := mid + 1
-    else return (n - first) % stride == 0
-  return false
+  let rec search (lo hi : Nat) : Bool :=
+    if lo < hi then
+      let mid := (lo + hi) / 2
+      let (first, last, stride) := ranges[mid]!
+      if n < first then search lo mid
+      else if n > last then search (mid + 1) hi
+      else (n - first) % stride == 0
+    else false
+  termination_by hi - lo
+  search 0 ranges.size
 
 public def isLetter (c : Char) : Bool := contains letters c
 public def isDigit (c : Char) : Bool := contains digits c

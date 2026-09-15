@@ -211,6 +211,7 @@ def lexerMain : IO Unit := do
   checkConstantAllocations "whitespace" (Parser.skipWhile Lex.isSpace) (chars ' ' 8) (chars ' ' 10000)
   checkConstantAllocations "block comment" Lex.blockCommentBody
     (copies "*a" 4 ++ "*/") (copies "*a" 5000 ++ "*/")
+  checkConstantAllocations "identifier" Lex.identifier (copies "가a1" 4) (copies "가a1" 5000)
   checkConstantAllocations "digits" (Lex.digitSeq Char.isDigit)
     (copies "1_" 4 ++ "1") (copies "1_" 5000 ++ "1")
   checkConstantAllocations "interpreted string" Lex.interpretedBody
