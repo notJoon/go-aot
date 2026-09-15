@@ -24,6 +24,15 @@ private def sourceView (source : String) (text : String.Slice) (span : Span)
       (fun (name, expected) => sourceView source name.text name.span expected) &&
     sourceView source text span "1_000" && text.toNat? == some 1000
 
+#guard ["a", "Z", "_", "a0", "_09", "Ab_c123"].all IR.validName
+#guard ["", "0", "9abc", "a-b", "a b", "a\n", "가", "a가", "a١", "a\x00"].all
+  fun name => !IR.validName name
+
+#guard match (parse (Source.ofString
+    "package main\nfunc f() int { return 1 }\nfunc f() int { return 2 }\nfunc main() {}\n")).bind Lowering.lower with
+  | .error error => error == ⟨.lowering, some ⟨44, 45⟩, "duplicate function 'f'"⟩
+  | .ok _ => false
+
 -- Existing phase interfaces reject mixed inputs without result wrappers.
 example : Source → Except Diagnostic Syntax.File := parse
 example : Syntax.File → Except Diagnostic IR.Program := Lowering.lower

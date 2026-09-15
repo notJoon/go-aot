@@ -3,6 +3,7 @@ module
 public import Compiler.Scope
 public import Compiler.Parser.Go
 import Compiler.Literal
+import Std.Data.HashMap
 
 public section
 
@@ -19,12 +20,12 @@ private structure Signature where
   -- without rebuilding it before body lowering.
   scope : Scope
 
-private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature) := do
-  let mut result := #[]
+private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap String Signature) := do
+  let mut result : Std.HashMap String Signature := {}
   for function in file.functions do
     let name := function.name.text.copy
     unless IR.validName name do throw (diagnosticAt function.name.span s!"unsupported function name '{name}'")
-    if result.any (fun (signature : Signature) => signature.name == name) then
+    if result.contains name then
       throw (diagnosticAt function.name.span s!"duplicate function '{name}'")
     let mut parameters := #[]
     let mut scope := Scope.empty
@@ -42,11 +43,8 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature
       | some resultType =>
         if resultType.text == "int" then pure true
         else throw (diagnosticAt resultType.span s!"only int return values are supported in function '{name}'")
-    result := result.push ⟨name, parameters, returnsInt, scope⟩
+    result := result.insert name ⟨name, parameters, returnsInt, scope⟩
   return result
-
-private def findSignature? (all : Array Signature) (name : String.Slice) : Option Signature :=
-  all.find? fun signature => signature.name.toSlice == name
 
 private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray :=
   if literal.startsWith "\"" then return Literal.decodeInterpreted literal
@@ -112,26 +110,32 @@ private def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → 
   return (.value id, { builder with nextValue := id + 1 })
 
 -- A local shadows every function of the same name, including println, as in Go.
-private def checkCallable (scope : Scope) (callee : Syntax.Ident) : Except Diagnostic Unit := do
-  if (scope.find? callee.text.copy).isSome then
-    throw (diagnosticAt callee.span s!"cannot call non-function '{callee.text}'")
+private def checkCallable (scope : Scope) (name : String) (span : Span) : Except Diagnostic Unit := do
+  if (scope.find? name).isSome then
+    throw (diagnosticAt span s!"cannot call non-function '{name}'")
 
-private partial def lowerOperand (all : Array Signature) (scope : Scope)
-    (builder : Builder) : Syntax.Expr → Except Diagnostic (IR.Operand × IR.ValueKind × Builder)
+private structure LoweredOperand where
+  operand : IR.Operand
+  kind : IR.ValueKind
+  builder : Builder
+
+private partial def lowerOperand (all : Std.HashMap String Signature) (scope : Scope)
+    (builder : Builder) : Syntax.Expr → Except Diagnostic LoweredOperand
   | .intLiteral text span =>
     match text.toNat? with
     | some value => do
       if value > 9223372036854775807 then
         throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
-      return (.literal value, .int, builder)
+      return ⟨.literal value, .int, builder⟩
     | none => throw (diagnosticAt span s!"unsupported integer literal '{text}'")
   | .identifier name => do
     let some symbol := scope.find? name.text.copy
       | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-    return (symbol.operand, symbol.valueKind, builder)
+    return ⟨symbol.operand, symbol.valueKind, builder⟩
   | .call callee arguments span => do
-    checkCallable scope callee
-    let some signature := findSignature? all callee.text
+    let name := callee.text.copy
+    checkCallable scope name callee.span
+    let some signature := all[name]?
       | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
     unless signature.returnsInt do
       throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
@@ -140,15 +144,15 @@ private partial def lowerOperand (all : Array Signature) (scope : Scope)
     let mut lowered := #[]
     let mut builder := builder
     for argument in arguments do
-      let (value, kind, next) ← lowerOperand all scope builder argument
+      let ⟨value, kind, next⟩ ← lowerOperand all scope builder argument
       unless kind == .int do throw (diagnosticAt argument.span "function arguments must be int")
       lowered := lowered.push value
       builder := next
     let (value, next) ← builder.emitValue (.call · signature.name lowered)
-    return (value, .int, next)
+    return ⟨value, .int, next⟩
   | .binary op left right span => do
-    let (left, leftKind, builder) ← lowerOperand all scope builder left
-    let (right, rightKind, builder) ← lowerOperand all scope builder right
+    let ⟨left, leftKind, builder⟩ ← lowerOperand all scope builder left
+    let ⟨right, rightKind, builder⟩ ← lowerOperand all scope builder right
     unless leftKind == .int && rightKind == .int do
       throw (diagnosticAt span "binary operands must be int")
     let (op, kind) : IR.Op × IR.ValueKind := match op with
@@ -156,15 +160,16 @@ private partial def lowerOperand (all : Array Signature) (scope : Scope)
       | .subtract => (.subtract, .int)
       | .less => (.less, .bool)
     let (value, builder) ← builder.emitValue (.binary · op left right)
-    return (value, kind, builder)
+    return ⟨value, kind, builder⟩
   | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
 
 mutual
-  private partial def lowerStatement (all : Array Signature) (signature : Signature) (scope : Scope)
+  private partial def lowerStatement (all : Std.HashMap String Signature) (signature : Signature) (scope : Scope)
       (builder : Builder) : Syntax.Stmt → Except Diagnostic Builder
     | .expr (.call callee arguments span) => do
-      checkCallable scope callee
-      if callee.text != "println" then
+      let name := callee.text.copy
+      checkCallable scope name callee.span
+      if name != "println" then
         throw (diagnosticAt callee.span "only println calls may be used as statements")
       let some argument := arguments[0]?
         | throw (diagnosticAt span "println expects one argument")
@@ -173,18 +178,18 @@ mutual
         | .stringLiteral literal span =>
           pure (IR.Instruction.printString (← decodeString literal span), builder)
         | _ => do
-          let (value, kind, builder) ← lowerOperand all scope builder argument
+          let ⟨value, kind, builder⟩ ← lowerOperand all scope builder argument
           unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
           pure (.printInt value, builder)
       builder.emit instruction
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      let (operand, kind, builder) ← lowerOperand all scope builder value
+      let ⟨operand, kind, builder⟩ ← lowerOperand all scope builder value
       unless kind == .int do throw (diagnosticAt value.span "return value must be int")
       builder.terminate (.ret (some operand))
     | .ifThen condition body => do
-      let (operand, kind, builder) ← lowerOperand all scope builder condition
+      let ⟨operand, kind, builder⟩ ← lowerOperand all scope builder condition
       unless kind == .bool do throw (diagnosticAt condition.span "if condition must be bool")
       -- Closed paths still check source semantics, without reserving unreachable blocks.
       if builder.current.isNone then return ← lowerStatements all signature scope.enter builder body
@@ -196,7 +201,7 @@ mutual
       let builder ← builder.terminate (.br continuation)
       builder.selectBlock continuation
 
-  private partial def lowerStatements (all : Array Signature) (signature : Signature) (scope : Scope)
+  private partial def lowerStatements (all : Std.HashMap String Signature) (signature : Signature) (scope : Scope)
       (builder : Builder) (statements : Array Syntax.Stmt) : Except Diagnostic Builder := do
     let mut builder := builder
     for statement in statements do
@@ -207,13 +212,13 @@ end
 def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
   if file.packageName.text != "main" then throw (diagnosticAt file.packageName.span "expected package main")
   let all ← signatures file
-  let some main := findSignature? all "main" | throw ⟨.lowering, none, "expected main function"⟩
+  let some main := all["main"]? | throw ⟨.lowering, none, "expected main function"⟩
   unless main.parameters.isEmpty && !main.returnsInt do
     throw ⟨.lowering, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
       "main must have no parameters or return value"⟩
   let mut functions := #[]
   for function in file.functions do
-    let some signature := findSignature? all function.name.text
+    let some signature := all[function.name.text.copy]?
       | throw (diagnosticAt function.name.span "internal error: missing function signature")
     if signature.name != "main" && !signature.returnsInt then
       throw (diagnosticAt function.name.span s!"function '{signature.name}' must return int")

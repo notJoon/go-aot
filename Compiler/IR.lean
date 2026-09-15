@@ -63,9 +63,7 @@ private def asciiLetter (c : Char) : Bool :=
 private def asciiDigit (c : Char) : Bool := '0' ≤ c && c ≤ '9'
 
 def validName (name : String) : Bool :=
-  match name.toList with
-  | [] => false
-  | first :: rest => (asciiLetter first || first == '_') &&
-      rest.all fun c => asciiLetter c || asciiDigit c || c == '_'
+  !name.isEmpty && (asciiLetter name.front || name.front == '_') &&
+    name.all fun c => asciiLetter c || asciiDigit c || c == '_'
 
 end GoAot.IR

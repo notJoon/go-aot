@@ -26,44 +26,44 @@ private def collectRuntimeNeeds (program : IR.Program) :
         | .binary .. | .call .. => pure ()
   return (result, indices, needsIntFormat)
 
-private def hexDigit : Nat → String
-  | 0 => "0" | 1 => "1" | 2 => "2" | 3 => "3" | 4 => "4" | 5 => "5"
-  | 6 => "6" | 7 => "7" | 8 => "8" | 9 => "9" | 10 => "A" | 11 => "B"
-  | 12 => "C" | 13 => "D" | 14 => "E" | _ => "F"
+private def emitBytes (output : String) (bytes : ByteArray) : String := Id.run do
+  let mut output := output
+  for byte in bytes do
+    let value := byte.toNat
+    if 32 <= value && value <= 126 && value != 34 && value != 92 then
+      output := output.push (Char.ofNat value)
+    else
+      output := (output.push '\\').push (value / 16).digitChar.toUpper
+      output := output.push (value % 16).digitChar.toUpper
+  return output
 
-private def escapeByte (byte : UInt8) : String :=
-  let value := byte.toNat
-  if 32 <= value && value <= 126 && value != 34 && value != 92 then
-    String.singleton (Char.ofNat value)
-  else
-    "\\" ++ hexDigit (value / 16) ++ hexDigit (value % 16)
-
-private def emitBytes (bytes : ByteArray) : String :=
-  String.join (bytes.toList.map escapeByte)
-
-private def operand : IR.Operand → String
-  | .value id => s!"%v{id}"
-  | .literal value => toString value
-  | .argument index => s!"%arg{index}"
+private def emitOperand (output : String) : IR.Operand → String
+  | .value id => output ++ "%v" ++ toString id
+  | .literal value => output ++ toString value
+  | .argument index => output ++ "%arg" ++ toString index
 
 private def emitInstructions (stringIndices : Std.HashMap ByteArray Nat)
-    (instructions : Array IR.Instruction) (output : Array String) : Array String := Id.run do
+    (output : String) (instructions : Array IR.Instruction) : String := Id.run do
   let mut output := output
   for instruction in instructions do
     match instruction with
     | .binary id op left right =>
       let operation := match op with
         | .add => "add i64" | .subtract => "sub i64" | .less => "icmp slt i64"
-      output := output.push s!"  %v{id} = {operation} {operand left}, {operand right}\n"
+      output := emitOperand (output ++ "  %v" ++ toString id ++ " = " ++ operation ++ " ") left
+      output := emitOperand (output ++ ", ") right ++ "\n"
     | .call id name arguments =>
-      let values := arguments.toList.map fun value => "i64 " ++ operand value
-      output := output.push (s!"  %v{id} = call i64 @{Symbol.function name}(" ++
-        String.intercalate ", " values ++ ")\n")
+      output := output ++ "  %v" ++ toString id ++ " = call i64 @" ++ Symbol.function name ++ "("
+      for h : index in [:arguments.size] do
+        if index != 0 then output := output ++ ", "
+        output := emitOperand (output ++ "i64 ") arguments[index]
+      output := output ++ ")\n"
     | .printString bytes =>
       let index := stringIndices[bytes]!
-      output := output.push s!"  call void @goaot.print_line(ptr @.str.{index}, i64 {bytes.size})\n"
+      output := output ++ "  call void @goaot.print_line(ptr @.str." ++ toString index ++
+        ", i64 " ++ toString bytes.size ++ ")\n"
     | .printInt value =>
-      output := output.push s!"  call i32 (ptr, ...) @printf(ptr @.int_format, i64 {operand value})\n"
+      output := emitOperand (output ++ "  call i32 (ptr, ...) @printf(ptr @.int_format, i64 ") value ++ ")\n"
   return output
 
 private def resultType (function : IR.Function) : String :=
@@ -71,45 +71,49 @@ private def resultType (function : IR.Function) : String :=
   | .int => "i64"
   | .void => if Symbol.isEntry function then "i32" else "void"
 
-private def emitTerminator (function : IR.Function) : IR.Terminator → String
-  | .br target => s!"  br label %bb{target}\n"
+private def emitTerminator (function : IR.Function) (output : String) : IR.Terminator → String
+  | .br target => output ++ "  br label %bb" ++ toString target ++ "\n"
   | .condBr condition ifTrue ifFalse =>
-    s!"  br i1 {operand condition}, label %bb{ifTrue}, label %bb{ifFalse}\n"
+    emitOperand (output ++ "  br i1 ") condition ++ ", label %bb" ++ toString ifTrue ++
+      ", label %bb" ++ toString ifFalse ++ "\n"
   | .ret none =>
-    if Symbol.returnsVoid function then "  ret void\n"
-    else s!"  ret {resultType function} 0\n"
-  | .ret (some value) => s!"  ret {resultType function} {operand value}\n"
+    if Symbol.returnsVoid function then output ++ "  ret void\n"
+    else output ++ "  ret " ++ resultType function ++ " 0\n"
+  | .ret (some value) => emitOperand (output ++ "  ret " ++ resultType function ++ " ") value ++ "\n"
 
-private def emitFunction (stringIndices : Std.HashMap ByteArray Nat) (output : Array String)
-    (function : IR.Function) : Array String := Id.run do
-  let parameters := function.parameters.mapIdx fun index _ => s!"i64 %arg{index}"
+private def emitFunction (stringIndices : Std.HashMap ByteArray Nat) (output : String)
+    (function : IR.Function) : String := Id.run do
   let linkage := if Symbol.isEntry function then "" else "internal "
-  let mut output := output.push (s!"define {linkage}{resultType function} @{Symbol.function function.name}(" ++
-    String.intercalate ", " parameters.toList ++ ") {\n")
+  let mut output := output ++ "define " ++ linkage ++ resultType function ++ " @" ++ Symbol.function function.name ++ "("
+  for index in [:function.parameters.size] do
+    if index != 0 then output := output ++ ", "
+    output := output ++ "i64 %arg" ++ toString index
+  output := output ++ ") {\n"
   for h : index in [:function.blocks.size] do
     let block := function.blocks[index]
-    output := output.push ((if index == 0 then "" else "\n") ++ s!"bb{index}:\n")
-    output := (emitInstructions stringIndices block.instructions output).push
-      (emitTerminator function block.terminator)
-  return output.push "}\n"
+    if index != 0 then output := output ++ "\n"
+    output := output ++ "bb" ++ toString index ++ ":\n"
+    output := emitInstructions stringIndices output block.instructions
+    output := emitTerminator function output block.terminator
+  return output ++ "}\n"
 
 def emit (program : IR.Program) : String := Id.run do
   let (strings, stringIndices, needsIntFormat) := collectRuntimeNeeds program
 
-  let mut output : Array String := #[]
-  for i in [:strings.size] do
-    let bytes := strings[i]!
-    output := output.push (s!"@.str.{i} = private unnamed_addr constant [{bytes.size + 1} x i8] c\"" ++
-      emitBytes bytes ++ "\\00\"\n")
+  let mut output := ""
+  for h : i in [:strings.size] do
+    let bytes := strings[i]
+    output := emitBytes (output ++ "@.str." ++ toString i ++ " = private unnamed_addr constant [" ++
+      toString (bytes.size + 1) ++ " x i8] c\"") bytes ++ "\\00\"\n"
   if needsIntFormat then
-    output := output.push "@.int_format = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n"
-  if !strings.isEmpty || needsIntFormat then output := output.push "\n"
+    output := output ++ "@.int_format = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n"
+  if !strings.isEmpty || needsIntFormat then output := output ++ "\n"
   if !strings.isEmpty then
-    output := output.push "declare i32 @fflush(ptr)\ndeclare i64 @write(i32, ptr, i64)\n"
-  if needsIntFormat then output := output.push "declare i32 @printf(ptr, ...)\n"
-  if !strings.isEmpty || needsIntFormat then output := output.push "\n"
+    output := output ++ "declare i32 @fflush(ptr)\ndeclare i64 @write(i32, ptr, i64)\n"
+  if needsIntFormat then output := output ++ "declare i32 @printf(ptr, ...)\n"
+  if !strings.isEmpty || needsIntFormat then output := output ++ "\n"
   -- Darwin exposes `__stdoutp` so `stdout` is not a portable linkable symbol.
-  if !strings.isEmpty then output := output.push <|
+  if !strings.isEmpty then output := output ++
     "define internal void @goaot.print_line(ptr %bytes, i64 %length) {\n" ++
     "entry:\n  %newline = alloca i8\n  store i8 10, ptr %newline\n" ++
     "  call i32 @fflush(ptr null)\n  br label %loop\n\nloop:\n" ++
@@ -122,8 +126,9 @@ def emit (program : IR.Program) : String := Id.run do
     "  %next = add i64 %offset, %written\n  %failed = icmp slt i64 %written, 1\n" ++
     "  br i1 %failed, label %exit, label %loop\n\n" ++
     "exit:\n  call i64 @write(i32 1, ptr %newline, i64 1)\n  ret void\n}\n\n"
-  for function in program.functions do
-    output := (emitFunction stringIndices output function).push "\n"
-  return (String.join output.pop.toList)
+  for h : index in [:program.functions.size] do
+    if index != 0 then output := output ++ "\n"
+    output := emitFunction stringIndices output program.functions[index]
+  return output
 
 end GoAot.Backend.LLVM
