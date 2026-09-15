@@ -88,48 +88,48 @@ def simpleEscape? : Char → Option UInt8
   | '\\' => some 92
   | _ => none
 
-private def takeDigits (kind : EscapeKind) : Nat → Nat → List Char → Except String (Nat × List Char)
-  | 0, value, rest => return (value, rest)
-  | count + 1, value, c :: rest =>
-    if kind.accepts c then takeDigits kind count (value * kind.base + digitValue c) rest
-    else throw "invalid string escape"
-  | _, _, [] => throw "incomplete string escape"
-
-private def pushChar (bytes : ByteArray) (c : Char) : ByteArray := Id.run do
-  let mut result := bytes
-  for byte in (String.singleton c).toUTF8 do result := result.push byte
-  return result
-
 /--
-Decode source escapes once at the semantic boundary so backends never reinterpret Go syntax.
-The input is the literal body without its surrounding quotes.
+Decode an interpreted string literal once at the semantic boundary so backends never reinterpret Go syntax.
+The input keeps its surrounding quotes and must already be accepted by the lexer, which validates escapes.
+Unescaped bytes are copied as they are because `\` never occurs inside a multibyte UTF-8 sequence.
 
-`decodeInterpreted "a\\x41\\n".toList = .ok` bytes `[97, 65, 10]`,
-`decodeInterpreted "\\q".toList = .error "invalid string escape"`,
-`decodeInterpreted "\\x4".toList = .error "incomplete string escape"`
+`decodeInterpreted "\"a\\x41\\n\""` is the bytes `[97, 65, 10]`
 -/
-partial def decodeInterpreted (chars : List Char) (bytes : ByteArray := .empty) :
-    Except String ByteArray := do
-  match chars with
-  | [] => return bytes
-  | '\\' :: escaped :: rest =>
-    if let some byte := simpleEscape? escaped then
-      decodeInterpreted rest (bytes.push byte)
-    else if escaped == '"' then
-      decodeInterpreted rest (bytes.push 34)
-    else if escaped == 'x' then
-      let (value, rest) ← takeDigits .hexByte EscapeKind.hexByte.width 0 rest
-      decodeInterpreted rest (bytes.push value.toUInt8)
-    else if escaped == 'u' || escaped == 'U' then
-      let kind := if escaped == 'u' then EscapeKind.unicode4 else .unicode8
-      let (value, rest) ← takeDigits kind kind.width 0 rest
-      decodeInterpreted rest (pushChar bytes (Char.ofNat value))
-    else if isOctDigit escaped then
-      let (value, rest) ← takeDigits .octal (EscapeKind.octal.width - 1) (digitValue escaped) rest
-      decodeInterpreted rest (bytes.push value.toUInt8)
+def decodeInterpreted (literal : String) : ByteArray := Id.run do
+  let byte (i : Nat) : UInt8 :=
+    if h : i < literal.utf8ByteSize then literal.getUTF8Byte ⟨i⟩ h else 0
+  let digits (kind : EscapeKind) (start : Nat) : Nat := Id.run do
+    let mut value := 0
+    for i in [start:start + kind.width] do
+      value := value * kind.base + digitValue (Char.ofUInt8 (byte i))
+    return value
+  let stop := literal.utf8ByteSize - 1
+  let mut bytes := ByteArray.empty
+  let mut i := 1
+  while i < stop do
+    if byte i != '\\'.toUInt8 then
+      bytes := bytes.push (byte i)
+      i := i + 1
     else
-      throw "invalid string escape"
-  | '\\' :: [] => throw "incomplete string escape"
-  | c :: rest => decodeInterpreted rest (pushChar bytes c)
+      let escaped := Char.ofUInt8 (byte (i + 1))
+      if let some value := simpleEscape? escaped then
+        bytes := bytes.push value
+        i := i + 2
+      else if escaped == '"' then
+        bytes := bytes.push 34
+        i := i + 2
+      else if escaped == 'x' then
+        bytes := bytes.push (digits .hexByte (i + 2)).toUInt8
+        i := i + 2 + EscapeKind.hexByte.width
+      else if escaped == 'u' || escaped == 'U' then
+        let kind := if escaped == 'u' then EscapeKind.unicode4 else .unicode8
+        for value in String.utf8EncodeChar (Char.ofNat (digits kind (i + 2))) do
+          bytes := bytes.push value
+        i := i + 2 + kind.width
+      else
+        -- The lexer admits only octal escapes past this point.
+        bytes := bytes.push (digits .octal (i + 1)).toUInt8
+        i := i + 1 + EscapeKind.octal.width
+  return bytes
 
 end GoAot.Literal

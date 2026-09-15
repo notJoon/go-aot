@@ -47,13 +47,9 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature
 private def findSignature? (all : Array Signature) (name : String) : Option Signature :=
   all.find? fun signature => signature.name == name
 
-private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray := do
-  match literal.toList with
-  | '"' :: rest =>
-    match rest.reverse with
-    | '"' :: reversed => (Literal.decodeInterpreted reversed.reverse).mapError (diagnosticAt span)
-    | _ => throw (diagnosticAt span "unterminated string literal")
-  | _ => throw (diagnosticAt span "raw string literals are not supported yet")
+private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray :=
+  if literal.startsWith "\"" then return Literal.decodeInterpreted literal
+  else throw (diagnosticAt span "raw string literals are not supported yet")
 
 private structure PendingBlock where
   instructions : Array IR.Instruction := #[]

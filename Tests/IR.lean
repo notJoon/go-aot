@@ -172,6 +172,14 @@ private def lowered (text : String) : Option IR.Program :=
     | _ => false
   | none => false
 
+-- Interpreted strings decode every escape kind and keep multibyte source bytes.
+#guard match lowered
+    "package main\nfunc main() { println(\"\\x41\\u00e9\\U0001F600\\101\\\"\\\\\\t한\") }\n" with
+  | some program => match (program.functions[0]?.map (·.blocks) : Option (Array IR.Block)) with
+    | some #[⟨#[.printString bytes], _⟩] => bytes.toList == "Aé😀A\"\\\t한".toUTF8.toList
+    | _ => false
+  | none => false
+
 -- Dead source after a return emits no blocks or instructions.
 #guard match lowered
     "package main\nfunc f() int { return 1; println(\"dead\"); if 1 < 2 { println(f() + f()) }; return f() }\nfunc main() {}" with
