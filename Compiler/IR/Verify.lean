@@ -53,7 +53,15 @@ def VerifyError.render (error : VerifyError) : String := Id.run do
 private structure BlockState where
   definitions : Std.HashSet ValueId
   values : Std.HashMap ValueId ValueKind := {}
+  /-- Slots declared so far in the entry block, retained when checking subsequent blocks. -/
+  slots : Std.HashMap SlotId ValueKind := {}
 
+/--
+Checks function signatures, control flow, value definitions, and operand kinds.
+Slots must be declared once in the entry block before use, and accesses must match their kinds.
+Slot initialization is the responsibility of lowering and is not checked here.
+Returns the first error with its function, block, and instruction or terminator location.
+-/
 def verify (program : Program) : Except VerifyError Unit := do
   let mut functions : Std.HashMap String Function := {}
   for function in program.functions do
@@ -80,14 +88,24 @@ def verify (program : Program) : Except VerifyError Unit := do
   unless functions.contains "main" do throw { message := "expected main function" }
   for function in program.functions do
     let mut definitions : Std.HashSet ValueId := {}
+    let mut slots : Std.HashMap SlotId ValueKind := {}
     for h : blockIndex in [:function.blocks.size] do
       let block := function.blocks[blockIndex]
-      -- One loop state avoids repacking both maps after instructions that define no value.
-      let mut state : BlockState := { definitions }
+      -- One loop state avoids repacking the maps after instructions that change no definitions.
+      let mut state : BlockState := { definitions, slots }
       for h : instructionIndex in [:block.instructions.size] do
         let instruction := block.instructions[instructionIndex]
         let checked : Except String Unit := do
           match instruction with
+          | .alloca slot _ =>
+            if blockIndex != 0 then throw "slots must be allocated in the entry block"
+            if state.slots.contains slot then throw s!"slot {slot} is declared more than once"
+          | .load _ slot kind | .store slot kind _ =>
+            let some declaredKind := state.slots[slot]?
+              | throw s!"slot {slot} is not declared earlier in the entry block"
+            if kind != declaredKind then throw s!"slot {slot} type mismatch"
+            if let .store _ _ value := instruction then
+              verifyOperand function state.values kind value
           | .binary _ _ left right =>
             verifyOperand function state.values .int left
             verifyOperand function state.values .int right
@@ -105,7 +123,8 @@ def verify (program : Program) : Except VerifyError Unit := do
           { message, function? := some function.name, block? := some blockIndex,
             instruction? := some instructionIndex }
         match instruction with
-        | .binary result .. | .call result .. =>
+        | .alloca slot kind => state := { state with slots := state.slots.insert slot kind }
+        | .binary result .. | .call result .. | .load result .. =>
           if state.definitions.contains result then
             throw {
               message := s!"value {result} is defined more than once"
@@ -113,12 +132,14 @@ def verify (program : Program) : Except VerifyError Unit := do
               instruction? := some instructionIndex }
           let kind := match instruction with
             | .binary _ .less .. => .bool
+            | .load _ _ kind => kind
             | _ => .int
-          state := {
+          state := { state with
             definitions := state.definitions.insert result
             values := state.values.insert result kind }
         | _ => pure ()
       definitions := state.definitions
+      slots := state.slots
       let checked : Except String Unit := do
         match block.terminator with
         | .br target => verifyTarget function target

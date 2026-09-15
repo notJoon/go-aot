@@ -88,13 +88,15 @@ private def checkLLVM (name : String) (golden : Bool := false) : IO Unit := do
       discard <| IO.Process.run { cmd := ← clangCommand, args := compileArgs }
       let output ← IO.Process.run { cmd := exePath.toString }
       check (output == expectedOutput) s!"wrong LLVM output: {name}: {repr output}"
-      if name == "hello" then
+      if name == "hello" || name == "locals" then
         let optimizeArgs := llvmOptions ++ #["-S", "-emit-llvm", "-x", "ir", llvmPath.toString,
           "-o", optimizedPath.toString]
         discard <| IO.Process.run { cmd := ← clangCommand, args := optimizeArgs }
         let optimized ← IO.FS.readFile optimizedPath
         check (optimized.contains "target datalayout") "optimized LLVM IR has no data layout"
         check (optimized.contains "target triple") "optimized LLVM IR has no target triple"
+        if name == "locals" then
+          check (!optimized.contains "alloca ") "optimized locals still contain stack allocations"
   | .error diagnostic =>
     throw (IO.userError s!"LLVM compile failed: {name}: {diagnostic.render (Source.ofString input)}")
 
@@ -164,6 +166,9 @@ private def checkDirectCFG : IO Unit := do
 def goldenMain : IO Unit := do
   checkGolden "minimal"
   checkGolden "invalid"
+  checkCompileGolden "locals"
+  checkLLVM "locals" true
+  checkDifferential "locals"
   checkCompileGolden "hello"
   checkCompileGolden "fib"
   checkCompileGolden "tail_add"

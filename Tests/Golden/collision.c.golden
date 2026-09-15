@@ -4,9 +4,12 @@
 static int64_t go_tmp_1(int64_t arg_tmp_0);
 
 static int64_t go_tmp_1(int64_t arg_tmp_0) {
+  int64_t slot_0;
   bb0: {
-    int64_t tmp_0 = arg_tmp_0 + 1;
-    return tmp_0;
+    slot_0 = arg_tmp_0;
+    int64_t tmp_0 = slot_0;
+    int64_t tmp_1 = tmp_0 + 1;
+    return tmp_1;
   }
 }
 

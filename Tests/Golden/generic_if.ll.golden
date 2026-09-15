@@ -4,15 +4,19 @@ declare i32 @printf(ptr, ...)
 
 define internal i64 @go_choose(i64 %arg0) {
 bb0:
-  %v0 = icmp slt i64 %arg0, 2
-  br i1 %v0, label %bb1, label %bb2
+  %slot0 = alloca i64
+  store i64 %arg0, ptr %slot0
+  %v0 = load i64, ptr %slot0
+  %v1 = icmp slt i64 %v0, 2
+  br i1 %v1, label %bb1, label %bb2
 
 bb1:
   ret i64 7
 
 bb2:
-  %v1 = add i64 %arg0, 1
-  ret i64 %v1
+  %v2 = load i64, ptr %slot0
+  %v3 = add i64 %v2, 1
+  ret i64 %v3
 }
 
 define i32 @main() {

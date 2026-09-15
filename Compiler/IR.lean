@@ -6,6 +6,9 @@ namespace GoAot.IR
 
 abbrev ValueId := Nat
 
+/-- Identifies a mutable stack slot within a function, independently of value IDs. -/
+abbrev SlotId := Nat
+
 inductive Operand where
   | value (id : ValueId)
   | literal (value : Nat)
@@ -29,9 +32,19 @@ inductive ReturnKind where
   | int
   deriving BEq
 
--- Values are defined once per function and used only after their definition in the same block.
--- Local variables will require relaxing the block-local rule to dominance checking.
+/--
+An operation within a basic block.
+
+Values are defined once per function and used only after their definition in the same block.
+Slots are allocated in the entry block and can be accessed from every block.
+-/
 inductive Instruction where
+  /-- Allocates a slot of the given kind in the entry block. Does not initialize its contents. -/
+  | alloca (slot : SlotId) (kind : ValueKind)
+  /-- Reads a declared slot into a fresh value. `kind` must match the slot's declared kind. -/
+  | load (result : ValueId) (slot : SlotId) (kind : ValueKind)
+  /-- Writes a value to a declared slot. Both `kind` and the operand must match its declared kind. -/
+  | store (slot : SlotId) (kind : ValueKind) (value : Operand)
   | binary (result : ValueId) (op : Op) (left right : Operand)
   | call (result : ValueId) (name : String) (arguments : Array Operand)
   -- Source escapes are decoded during lowering so every backend receives identical bytes.
@@ -49,7 +62,7 @@ structure Block where
 
 structure Function where
   name : String
-  -- Display names only; expression references are resolved argument indices.
+  -- Display names only. Argument operands use indices, and lowering copies parameters into slots.
   parameters : Array String
   returnKind : ReturnKind
   blocks : Array Block

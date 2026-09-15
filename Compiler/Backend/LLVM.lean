@@ -23,7 +23,7 @@ private def collectRuntimeNeeds (program : IR.Program) :
             indices := indices.insert bytes result.size
             result := result.push bytes
         | .printInt _ => needsIntFormat := true
-        | .binary .. | .call .. => pure ()
+        | _ => pure ()
   return (result, indices, needsIntFormat)
 
 private def emitBytes (output : String) (bytes : ByteArray) : String := Id.run do
@@ -47,6 +47,13 @@ private def emitInstructions (stringIndices : Std.HashMap ByteArray Nat)
   let mut output := output
   for instruction in instructions do
     match instruction with
+    | .alloca slot kind =>
+      output := output ++ s!"  %slot{slot} = alloca {if kind == .int then "i64" else "i1"}\n"
+    | .load id slot kind =>
+      output := output ++ s!"  %v{id} = load {if kind == .int then "i64" else "i1"}, ptr %slot{slot}\n"
+    | .store slot kind value =>
+      output := emitOperand (output ++ s!"  store {if kind == .int then "i64" else "i1"} ") value ++
+        s!", ptr %slot{slot}\n"
     | .binary id op left right =>
       let operation := match op with
         | .add => "add i64" | .subtract => "sub i64" | .less => "icmp slt i64"

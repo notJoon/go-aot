@@ -35,6 +35,11 @@ private def emitInstructions (parameters : Array String)
   let mut output := output
   for instruction in instructions do
     match instruction with
+    | .alloca .. => pure () -- Slot declarations are emitted outside the block braces.
+    | .load id slot _ =>
+      output := output ++ s!"    int64_t tmp_{id} = slot_{slot};\n"
+    | .store slot _ value =>
+      output := emitOperand parameters (output ++ s!"    slot_{slot} = ") value ++ ";\n"
     | .binary id op left right =>
       let symbol := match op with | .add => "+" | .subtract => "-" | .less => "<"
       output := emitOperand parameters (output ++ "    int64_t tmp_" ++ toString id ++ " = ") left
@@ -77,6 +82,12 @@ def emit (program : IR.Program) : String := Id.run do
   output := output ++ "\n"
   for function in program.functions do
     output := emitHeader (output ++ "\n" ++ (if Symbol.isEntry function then "" else "static ")) function ++ " {\n"
+    -- Slots must remain visible across block braces. Bool slots also use int64_t,
+    -- matching the existing representation of comparison results as 0 or 1.
+    if let some entry := function.blocks[0]? then
+      for instruction in entry.instructions do
+        if let .alloca slot _ := instruction then
+          output := output ++ s!"  int64_t slot_{slot};\n"
     for h : index in [:function.blocks.size] do
       let block := function.blocks[index]
       output := output ++ "  bb" ++ toString index ++ ": {\n"

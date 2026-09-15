@@ -31,6 +31,13 @@ def Expr.span : Expr → Span
   | .identifier name => name.span
 
 inductive Stmt where
+  /--
+  Declares one local variable. An explicit `typeName` represents `var`, with an optional initializer.
+  A missing `typeName` represents `:=`, whose initializer is required by the parser.
+  -/
+  | varDeclaration (name : Ident) (typeName : Option Ident) (initializer : Option Expr)
+  /-- Assigns a value to an existing variable without introducing a binding. -/
+  | assignment (name : Ident) (value : Expr)
   | expr (value : Expr)
   | return (value : Expr)
   | ifThen (condition : Expr) (body : Array Stmt)

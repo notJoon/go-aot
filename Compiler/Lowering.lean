@@ -36,7 +36,7 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap Str
       unless IR.validName parameterName do
         throw (diagnosticAt parameter.name.span s!"unsupported parameter name '{parameter.name.text}'")
       scope ← scope.declare parameterName
-        ⟨.parameter, .argument parameters.size, .int, parameter.name.span⟩
+        ⟨.parameter, parameters.size, .int, parameter.name.span⟩
       parameters := parameters.push parameterName
     let returnsInt ← match function.resultType with
       | none => pure false
@@ -58,6 +58,8 @@ private structure Builder where
   blocks : Array PendingBlock := #[{}]
   current : Option IR.BlockId := some 0
   nextValue : IR.ValueId := 0
+  /-- Slot kinds indexed by slot ID, emitted as entry block allocations by `Builder.finish`. -/
+  slots : Array IR.ValueKind := #[]
 
 private def builderError : Diagnostic :=
   ⟨.lowering, none, "internal error: invalid CFG builder state"⟩
@@ -93,9 +95,17 @@ private def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
   if builder.current.isSome || block.terminator.isSome then throw builderError
   return { builder with current := some target }
 
+/--
+Finalizes terminated blocks and prepends slot allocations to the entry block.
+Keeping allocations there makes them dominate all uses and lets LLVM promote them.
+Initialization stores remain at their source declaration sites.
+-/
 private def Builder.finish (builder : Builder) : Except Diagnostic (Array IR.Block) := do
   if builder.current.isSome then throw builderError
-  builder.blocks.mapM fun block => do
+  let blocks := builder.blocks.modify 0 fun block =>
+    let allocations := builder.slots.mapIdx fun slot kind => IR.Instruction.alloca slot kind
+    { block with instructions := allocations ++ block.instructions }
+  blocks.mapM fun block => do
     let some terminator := block.terminator | throw builderError
     return ⟨block.instructions, terminator⟩
 
@@ -131,7 +141,8 @@ private partial def lowerOperand (all : Std.HashMap String Signature) (scope : S
   | .identifier name => do
     let some symbol := scope.find? name.text.copy
       | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-    return ⟨symbol.operand, symbol.valueKind, builder⟩
+    let (value, builder) ← builder.emitValue (.load · symbol.slot symbol.valueKind)
+    return ⟨value, symbol.valueKind, builder⟩
   | .call callee arguments span => do
     let name := callee.text.copy
     checkCallable scope name callee.span
@@ -182,6 +193,15 @@ mutual
           unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
           pure (.printInt value, builder)
       builder.emit instruction
+    -- Declarations are handled by lowerStatements, which retains the updated scope.
+    | .varDeclaration .. => throw builderError
+    | .assignment name value => do
+      let some symbol := scope.find? name.text.copy
+        | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
+      let ⟨operand, kind, builder⟩ ← lowerOperand all scope builder value
+      unless kind == symbol.valueKind do
+        throw (diagnosticAt value.span "assignment type does not match variable type")
+      builder.emit (.store symbol.slot kind operand)
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
@@ -201,12 +221,41 @@ mutual
       let builder ← builder.terminate (.br continuation)
       builder.selectBlock continuation
 
+  /--
+  Lowers a statement sequence, making each declaration visible to subsequent statements.
+  Scope changes remain within this sequence, while stores can update enclosing bindings.
+  -/
   private partial def lowerStatements (all : Std.HashMap String Signature) (signature : Signature) (scope : Scope)
       (builder : Builder) (statements : Array Syntax.Stmt) : Except Diagnostic Builder := do
-    let mut builder := builder
+    -- One loop state avoids an extra allocation per statement when threading both values.
+    let mut state := (scope, builder)
     for statement in statements do
-      builder ← lowerStatement all signature scope builder statement
-    return builder
+      match statement with
+      | .varDeclaration name typeName initializer =>
+        let (scope, builder) := state
+        if typeName.isNone && initializer.isNone then
+          throw (diagnosticAt name.span "variable declaration requires a type or initializer")
+        let nameText := name.text.copy
+        unless IR.validName nameText && nameText != "_" do
+          throw (diagnosticAt name.span s!"unsupported local name '{nameText}'")
+        if let some typeName := typeName then
+          unless typeName.text == "int" do
+            throw (diagnosticAt typeName.span "only int variable types are supported")
+        -- Resolve the initializer before introducing the binding, so `x := x + 1`
+        -- reads an enclosing x and rejects x when no enclosing binding exists.
+        let ⟨operand, kind, next⟩ ← match initializer with
+          | some value => lowerOperand all scope builder value
+          | none => pure ⟨.literal 0, .int, builder⟩
+        if typeName.isSome && kind != .int then
+          throw (diagnosticAt ((initializer.map (·.span)).getD name.span) "initializer must be int")
+        let slot := next.slots.size
+        let scope ← scope.declare nameText ⟨.local, slot, kind, name.span⟩
+        -- Reserve every declaration's ID, including dead source, so later declarations
+        -- cannot reuse it. Only the initialization store depends on reachability.
+        let builder := { next with slots := next.slots.push kind }
+        state := (scope, ← builder.emit (.store slot kind operand))
+      | _ => state := (state.1, ← lowerStatement all signature state.1 state.2 statement)
+    return state.2
 end
 
 def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
@@ -222,7 +271,12 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
       | throw (diagnosticAt function.name.span "internal error: missing function signature")
     if signature.name != "main" && !signature.returnsInt then
       throw (diagnosticAt function.name.span s!"function '{signature.name}' must return int")
-    let builder ← lowerStatements all signature signature.scope {} function.body
+    -- Parameter slot IDs match argument indices, as reserved by signatures.
+    -- Copy arguments once so parameter assignments share the local variable path.
+    let mut initial : Builder := { slots := Array.replicate signature.parameters.size .int }
+    for index in [:signature.parameters.size] do
+      initial ← initial.emit (.store index .int (.argument index))
+    let builder ← lowerStatements all signature signature.scope initial function.body
     if signature.returnsInt then
       match function.body.back? with
       | some (.return _) => pure ()

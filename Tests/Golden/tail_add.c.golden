@@ -5,27 +5,36 @@ static int64_t go_bump(int64_t arg_n);
 static int64_t go_sum(int64_t arg_n);
 
 static int64_t go_bump(int64_t arg_n) {
+  int64_t slot_0;
   bb0: {
-    int64_t tmp_0 = arg_n + 1;
-    return tmp_0;
+    slot_0 = arg_n;
+    int64_t tmp_0 = slot_0;
+    int64_t tmp_1 = tmp_0 + 1;
+    return tmp_1;
   }
 }
 
 static int64_t go_sum(int64_t arg_n) {
+  int64_t slot_0;
   bb0: {
-    int64_t tmp_0 = arg_n < 2;
-    if (tmp_0) goto bb1; else goto bb2;
+    slot_0 = arg_n;
+    int64_t tmp_0 = slot_0;
+    int64_t tmp_1 = tmp_0 < 2;
+    if (tmp_1) goto bb1; else goto bb2;
   }
   bb1: {
-    int64_t tmp_1 = go_bump(arg_n);
-    return tmp_1;
+    int64_t tmp_2 = slot_0;
+    int64_t tmp_3 = go_bump(tmp_2);
+    return tmp_3;
   }
   bb2: {
-    int64_t tmp_2 = go_bump(arg_n);
-    int64_t tmp_3 = arg_n - 1;
-    int64_t tmp_4 = go_sum(tmp_3);
-    int64_t tmp_5 = tmp_2 + tmp_4;
-    return tmp_5;
+    int64_t tmp_4 = slot_0;
+    int64_t tmp_5 = go_bump(tmp_4);
+    int64_t tmp_6 = slot_0;
+    int64_t tmp_7 = tmp_6 - 1;
+    int64_t tmp_8 = go_sum(tmp_7);
+    int64_t tmp_9 = tmp_5 + tmp_8;
+    return tmp_9;
   }
 }
 

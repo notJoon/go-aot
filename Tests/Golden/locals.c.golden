@@ -1,0 +1,135 @@
+#include <stdint.h>
+#include <stdio.h>
+
+static int64_t go_mark(int64_t arg_x);
+static int64_t go_update(int64_t arg_x);
+static int64_t go_early(int64_t arg_x);
+
+static int64_t go_mark(int64_t arg_x) {
+  int64_t slot_0;
+  bb0: {
+    slot_0 = arg_x;
+    int64_t tmp_0 = slot_0;
+    printf("%lld\n", (long long)tmp_0);
+    int64_t tmp_1 = slot_0;
+    return tmp_1;
+  }
+}
+
+static int64_t go_update(int64_t arg_x) {
+  int64_t slot_0;
+  int64_t slot_1;
+  int64_t slot_2;
+  int64_t slot_3;
+  int64_t slot_4;
+  int64_t slot_5;
+  bb0: {
+    slot_0 = arg_x;
+    slot_1 = 0;
+    int64_t tmp_0 = slot_1;
+    printf("%lld\n", (long long)tmp_0);
+    int64_t tmp_1 = slot_0;
+    int64_t tmp_2 = tmp_1 + 1;
+    slot_0 = tmp_2;
+    int64_t tmp_3 = slot_0;
+    int64_t tmp_4 = go_mark(tmp_3);
+    slot_2 = tmp_4;
+    int64_t tmp_5 = slot_0;
+    int64_t tmp_6 = 0 < tmp_5;
+    if (tmp_6) goto bb1; else goto bb2;
+  }
+  bb1: {
+    int64_t tmp_7 = slot_2;
+    int64_t tmp_8 = tmp_7 + 2;
+    slot_2 = tmp_8;
+    int64_t tmp_9 = slot_0;
+    int64_t tmp_10 = slot_2;
+    int64_t tmp_11 = tmp_9 + tmp_10;
+    slot_3 = tmp_11;
+    int64_t tmp_12 = slot_3;
+    printf("%lld\n", (long long)tmp_12);
+    slot_4 = 0;
+    int64_t tmp_13 = slot_4;
+    printf("%lld\n", (long long)tmp_13);
+    slot_4 = 9;
+    int64_t tmp_14 = slot_4;
+    printf("%lld\n", (long long)tmp_14);
+    goto bb2;
+  }
+  bb2: {
+    int64_t tmp_15 = slot_0;
+    int64_t tmp_16 = tmp_15 < 0;
+    if (tmp_16) goto bb3; else goto bb4;
+  }
+  bb3: {
+    slot_2 = 99;
+    goto bb4;
+  }
+  bb4: {
+    int64_t tmp_17 = 2 < 1;
+    slot_5 = tmp_17;
+    int64_t tmp_18 = slot_0;
+    int64_t tmp_19 = 0 < tmp_18;
+    if (tmp_19) goto bb5; else goto bb6;
+  }
+  bb5: {
+    int64_t tmp_20 = 2 < 3;
+    slot_5 = tmp_20;
+    goto bb6;
+  }
+  bb6: {
+    int64_t tmp_21 = slot_5;
+    if (tmp_21) goto bb7; else goto bb8;
+  }
+  bb7: {
+    int64_t tmp_22 = slot_2;
+    int64_t tmp_23 = tmp_22 + 4;
+    slot_2 = tmp_23;
+    goto bb8;
+  }
+  bb8: {
+    int64_t tmp_24 = slot_2;
+    return tmp_24;
+  }
+}
+
+static int64_t go_early(int64_t arg_x) {
+  int64_t slot_0;
+  int64_t slot_1;
+  int64_t slot_2;
+  bb0: {
+    slot_0 = arg_x;
+    int64_t tmp_0 = slot_0;
+    int64_t tmp_1 = tmp_0 < 1;
+    if (tmp_1) goto bb1; else goto bb2;
+  }
+  bb1: {
+    slot_1 = 8;
+    int64_t tmp_2 = slot_1;
+    return tmp_2;
+  }
+  bb2: {
+    slot_2 = 3;
+    int64_t tmp_3 = slot_2;
+    return tmp_3;
+  }
+}
+
+int main(void) {
+  int64_t slot_0;
+  bb0: {
+    int64_t tmp_0 = go_update(3);
+    printf("%lld\n", (long long)tmp_0);
+    int64_t tmp_1 = go_mark(1);
+    int64_t tmp_2 = go_mark(2);
+    int64_t tmp_3 = tmp_1 + tmp_2;
+    slot_0 = tmp_3;
+    int64_t tmp_4 = slot_0;
+    printf("%lld\n", (long long)tmp_4);
+    int64_t tmp_5 = go_early(0);
+    printf("%lld\n", (long long)tmp_5);
+    int64_t tmp_6 = go_early(1);
+    printf("%lld\n", (long long)tmp_6);
+    return 0;
+  }
+}

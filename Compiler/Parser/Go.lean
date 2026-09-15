@@ -81,6 +81,10 @@ private def statementEnd : P Unit := do
   let _ ← semicolon
   return ()
 
+private def rejectMultiple : P Unit := do
+  if ← peekSymbol "," then
+    Parser.fail "multiple variable declarations and assignments are unsupported"
+
 mutual
   private partial def expression (source : Source) : P Syntax.Expr :=
     comparison source
@@ -114,13 +118,14 @@ mutual
     match ← Parser.peek? with
     | some { kind := .stringLiteral, .. } => stringLiteral source
     | some { kind := .intLiteral, .. } => intLiteral source
-    | _ =>
+    | some { kind := .identifier, .. } =>
       let name ← identifier source
       unless ← peekSymbol "(" do return .identifier name
       let _ ← symbol "("
       let arguments ← argumentList source
       let last ← symbol ")"
       return .call name arguments ⟨name.span.start, last.span.stop⟩
+    | _ => Parser.fail "expected expression"
 
   private partial def argumentList (source : Source) : P (Array Syntax.Expr) := do
     if ← peekSymbol ")" then return #[]
@@ -134,8 +139,41 @@ mutual
     match ← Parser.peek? with
     | some { kind := .keyword "return", .. } => returnStatement source
     | some { kind := .keyword "if", .. } => ifStatement source
+    | some { kind := .keyword "var", .. } =>
+      let _ ← keyword "var"
+      let name ← identifier source
+      if ← peekSymbol "=" then
+        Parser.fail "var declarations without an explicit type are unsupported"
+      rejectMultiple
+      let typeName ← Parser.label (identifier source) "expected variable type"
+      let initializer ← if ← peekSymbol "=" then
+          let _ ← symbol "="
+          pure (some (← expression source))
+        else pure none
+      rejectMultiple
+      statementEnd
+      return .varDeclaration name (some typeName) initializer
     | _ =>
+      let start ← fun it => .ok it it
       let value ← expression source
+      if let .identifier _ := value then rejectMultiple
+      match ← Parser.peek? with
+      | some { kind := .symbol op, .. } =>
+        if op == "++" || op == "--" then
+          Parser.fail "increment and decrement statements are unsupported"
+        if ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "&^="].contains op then
+          Parser.fail "compound assignments are unsupported"
+      | _ => pure ()
+      if (← peekSymbol ":=") || (← peekSymbol "=") then
+        let .identifier name := value
+          | fun _ => .err start (.other "assignment target must be an identifier")
+        let short ← peekSymbol ":="
+        let _ ← symbol (if short then ":=" else "=")
+        let initializer ← expression source
+        rejectMultiple
+        statementEnd
+        return if short then .varDeclaration name none (some initializer)
+          else .assignment name initializer
       statementEnd
       return .expr value
 
@@ -154,7 +192,11 @@ mutual
 
   private partial def block (source : Source) : P (Array Syntax.Stmt × Token) := do
     let _ ← symbol "{"
-    let body ← Parser.many (statement source)
+    -- Once inside a block, statement errors must propagate even when their position
+    -- points back to the first token, as with an invalid assignment target.
+    let mut body := #[]
+    while !(← peekSymbol "}") && !(← Parser.isEof) do
+      body := body.push (← statement source)
     let last ← symbol "}"
     return (body, last)
 end

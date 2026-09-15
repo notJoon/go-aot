@@ -1,0 +1,128 @@
+@.int_format = private unnamed_addr constant [6 x i8] c"%lld\0A\00"
+
+declare i32 @printf(ptr, ...)
+
+define internal i64 @go_mark(i64 %arg0) {
+bb0:
+  %slot0 = alloca i64
+  store i64 %arg0, ptr %slot0
+  %v0 = load i64, ptr %slot0
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v0)
+  %v1 = load i64, ptr %slot0
+  ret i64 %v1
+}
+
+define internal i64 @go_update(i64 %arg0) {
+bb0:
+  %slot0 = alloca i64
+  %slot1 = alloca i64
+  %slot2 = alloca i64
+  %slot3 = alloca i64
+  %slot4 = alloca i64
+  %slot5 = alloca i1
+  store i64 %arg0, ptr %slot0
+  store i64 0, ptr %slot1
+  %v0 = load i64, ptr %slot1
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v0)
+  %v1 = load i64, ptr %slot0
+  %v2 = add i64 %v1, 1
+  store i64 %v2, ptr %slot0
+  %v3 = load i64, ptr %slot0
+  %v4 = call i64 @go_mark(i64 %v3)
+  store i64 %v4, ptr %slot2
+  %v5 = load i64, ptr %slot0
+  %v6 = icmp slt i64 0, %v5
+  br i1 %v6, label %bb1, label %bb2
+
+bb1:
+  %v7 = load i64, ptr %slot2
+  %v8 = add i64 %v7, 2
+  store i64 %v8, ptr %slot2
+  %v9 = load i64, ptr %slot0
+  %v10 = load i64, ptr %slot2
+  %v11 = add i64 %v9, %v10
+  store i64 %v11, ptr %slot3
+  %v12 = load i64, ptr %slot3
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v12)
+  store i64 0, ptr %slot4
+  %v13 = load i64, ptr %slot4
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v13)
+  store i64 9, ptr %slot4
+  %v14 = load i64, ptr %slot4
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v14)
+  br label %bb2
+
+bb2:
+  %v15 = load i64, ptr %slot0
+  %v16 = icmp slt i64 %v15, 0
+  br i1 %v16, label %bb3, label %bb4
+
+bb3:
+  store i64 99, ptr %slot2
+  br label %bb4
+
+bb4:
+  %v17 = icmp slt i64 2, 1
+  store i1 %v17, ptr %slot5
+  %v18 = load i64, ptr %slot0
+  %v19 = icmp slt i64 0, %v18
+  br i1 %v19, label %bb5, label %bb6
+
+bb5:
+  %v20 = icmp slt i64 2, 3
+  store i1 %v20, ptr %slot5
+  br label %bb6
+
+bb6:
+  %v21 = load i1, ptr %slot5
+  br i1 %v21, label %bb7, label %bb8
+
+bb7:
+  %v22 = load i64, ptr %slot2
+  %v23 = add i64 %v22, 4
+  store i64 %v23, ptr %slot2
+  br label %bb8
+
+bb8:
+  %v24 = load i64, ptr %slot2
+  ret i64 %v24
+}
+
+define internal i64 @go_early(i64 %arg0) {
+bb0:
+  %slot0 = alloca i64
+  %slot1 = alloca i64
+  %slot2 = alloca i64
+  store i64 %arg0, ptr %slot0
+  %v0 = load i64, ptr %slot0
+  %v1 = icmp slt i64 %v0, 1
+  br i1 %v1, label %bb1, label %bb2
+
+bb1:
+  store i64 8, ptr %slot1
+  %v2 = load i64, ptr %slot1
+  ret i64 %v2
+
+bb2:
+  store i64 3, ptr %slot2
+  %v3 = load i64, ptr %slot2
+  ret i64 %v3
+}
+
+define i32 @main() {
+bb0:
+  %slot0 = alloca i64
+  %v0 = call i64 @go_update(i64 3)
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v0)
+  %v1 = call i64 @go_mark(i64 1)
+  %v2 = call i64 @go_mark(i64 2)
+  %v3 = add i64 %v1, %v2
+  store i64 %v3, ptr %slot0
+  %v4 = load i64, ptr %slot0
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v4)
+  %v5 = call i64 @go_early(i64 0)
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v5)
+  %v6 = call i64 @go_early(i64 1)
+  call i32 (ptr, ...) @printf(ptr @.int_format, i64 %v6)
+  ret i32 0
+}

@@ -61,3 +61,50 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
 
 #guard (Diagnostic.mk .lexer (some ⟨5, 5⟩) "invalid span").render (Source.ofString "") ==
   "offset 5: invalid span"
+
+-- Unsupported declaration forms and malformed expressions retain the offending token's span.
+#guard [
+    ("var x ", "}", "", "expected variable type"),
+    ("var x ", "=", " 1 }", "var declarations without an explicit type are unsupported"),
+    ("a", ",", " b := 1, 2 }", "multiple variable declarations and assignments are unsupported"),
+    ("x ", "+=", " 1 }", "compound assignments are unsupported"),
+    ("x", "++", " }", "increment and decrement statements are unsupported"),
+    ("x", "--", " }", "increment and decrement statements are unsupported"),
+    ("var x int = 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
+    ("x := 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
+    ("x = 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
+    ("println(1)", ",", " 2 }", "expected semicolon"),
+    ("x := ", "}", "", "expected expression"),
+    ("", "f", "() = 1 }", "assignment target must be an identifier"),
+    ("", "1", " = 2 }", "assignment target must be an identifier")].all
+  fun (before, token, after, message) =>
+    let before := "package main\nfunc main() { " ++ before
+    let source := Source.ofString (before ++ token ++ after)
+    let expected : Diagnostic := ⟨.parser,
+      some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
+    failsWith (parse source) expected && failsWith (compileToC source) expected &&
+      failsWith (compileToLLVM source) expected
+
+-- Source locations distinguish an existing binding from the later offending declaration or use.
+#guard [
+    ("var x int; var ", "x", " int", "duplicate declaration 'x'"),
+    ("x := 1; ", "x", " := 2", "duplicate declaration 'x'"),
+    ("", "missing", " = 1", "unknown identifier 'missing'"),
+    ("x := ", "x", "", "unknown identifier 'x'"),
+    ("var x int = ", "1 < 2", "", "initializer must be int"),
+    ("println(\"가\"); ", "missing", " = 1", "unknown identifier 'missing'")].all
+  fun (before, token, after, message) =>
+    let before := "package main\nfunc main() { " ++ before
+    let source := Source.ofString (before ++ token ++ after ++ " }")
+    let expected : Diagnostic := ⟨.lowering,
+      some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
+    failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
+-- A comma after a return value is not a variable declaration or assignment error.
+#guard
+  let before := "package main\nfunc f() int { return 1"
+  let source := Source.ofString (before ++ ", 2 }\nfunc main() {}")
+  let expected : Diagnostic := ⟨.parser,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "expected semicolon"⟩
+  failsWith (parse source) expected && failsWith (compileToC source) expected &&
+    failsWith (compileToLLVM source) expected

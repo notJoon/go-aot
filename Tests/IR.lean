@@ -196,7 +196,10 @@ private def lowered (text : String) : Option IR.Program :=
 #guard match lowered
     "package main\nfunc f(z int, a int) int { return a - z }\nfunc main() { println(f(1, 2)) }\n" with
   | some program => accepted program && match (program.functions[0]?.map (·.blocks) : Option (Array IR.Block)) with
-    | some #[⟨#[.binary 0 .subtract (.argument 1) (.argument 0)], .ret (some (.value 0))⟩] => true
+    | some #[⟨#[.alloca 0 .int, .alloca 1 .int,
+        .store 0 .int (.argument 0), .store 1 .int (.argument 1),
+        .load 0 1 .int, .load 1 0 .int, .binary 2 .subtract (.value 0) (.value 1)],
+        .ret (some (.value 2))⟩] => true
     | _ => false
   | none => false
 
@@ -215,3 +218,49 @@ private def lowered (text : String) : Option IR.Program :=
     | some #[⟨#[], .ret (some (.literal 1))⟩] => true
     | _ => false
   | none => false
+
+-- Slots have function scope, while loaded values retain the block-local SSA rule.
+#guard accepted ⟨#[{ mainFunction with blocks := #[
+  ⟨#[.alloca 7 .int, .store 7 .int intValue], .br 1⟩,
+  ⟨#[.load 0 7 .int, .printInt (.value 0), .store 7 .int (.literal 2)], .ret none⟩] }]⟩
+#guard accepted ⟨#[{ mainFunction with blocks := #[
+  ⟨#[.alloca 7 .bool, comparison, .store 7 .bool boolValue, .load 1 7 .bool],
+    .condBr (.value 1) 1 1⟩, ⟨#[], .ret none⟩] }]⟩
+#guard [
+    (#[⟨#[.load 0 7 .int], .ret none⟩], "slot 7 is not declared earlier in the entry block"),
+    (#[⟨#[.store 7 .int intValue], .ret none⟩], "slot 7 is not declared earlier in the entry block"),
+    (#[⟨#[.load 0 7 .int, .alloca 7 .int], .ret none⟩],
+      "slot 7 is not declared earlier in the entry block"),
+    (#[⟨#[.alloca 7 .int, .alloca 7 .bool], .ret none⟩], "slot 7 is declared more than once"),
+    (#[⟨#[], .br 1⟩, ⟨#[.alloca 7 .int], .ret none⟩], "slots must be allocated in the entry block"),
+    (#[⟨#[.alloca 7 .int, .load 0 7 .bool], .ret none⟩], "slot 7 type mismatch"),
+    (#[⟨#[.alloca 7 .int, .store 7 .bool boolValue], .ret none⟩], "slot 7 type mismatch"),
+    (#[⟨#[.alloca 7 .bool, .store 7 .bool intValue], .ret none⟩], "expected bool operand"),
+    (#[⟨#[.alloca 7 .int, comparison, .store 7 .int boolValue], .ret none⟩], "expected int operand"),
+    (#[⟨#[.alloca 7 .int, .store 7 .int (.value 1)], .ret none⟩],
+      "value 1 is not defined earlier in this block"),
+    (#[⟨#[.alloca 7 .int, .load 0 7 .int, definition], .ret none⟩],
+      "value 0 is defined more than once"),
+    (#[⟨#[.alloca 7 .int, .load 0 7 .int], .br 1⟩,
+      ⟨#[.printInt (.value 0)], .ret none⟩], "value 0 is not defined earlier in this block")].all
+  fun ((blocks : Array IR.Block), message) => rejected ⟨#[{ mainFunction with blocks }]⟩ message
+#guard rejected ⟨#[{ mainFunction with blocks := #[⟨#[.alloca 7 .int], .ret none⟩] },
+  { intFunction with blocks := #[⟨#[.load 0 7 .int], .ret (some (.value 0))⟩] }]⟩
+  "slot 7 is not declared earlier in the entry block"
+#guard match lowered
+    "package main\nfunc f() int { return 1; var x int; y := 1 < 2; x = 2; if y { x = 3 }; return x }; func main() {}" with
+  | some program => accepted program && match (program.functions[0]?.map (·.blocks) : Option (Array IR.Block)) with
+    | some #[⟨#[.alloca 0 .int, .alloca 1 .bool], .ret (some (.literal 1))⟩] => true
+    | _ => false
+  | none => false
+
+-- Even syntax supplied directly to lowering must provide a type or an initializer.
+#guard Id.run do
+  let .ok file := parse (Source.ofString "package main\nfunc main() { var x int }")
+    | return false
+  let some function := file.functions[0]? | return false
+  let some (Syntax.Stmt.varDeclaration name _ _) := function.body[0]? | return false
+  let file := { file with functions := #[{ function with body := #[.varDeclaration name none none] }] }
+  return match Lowering.lower file with
+    | .error error => error == ⟨.lowering, some name.span, "variable declaration requires a type or initializer"⟩
+    | .ok _ => false

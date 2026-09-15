@@ -13,26 +13,37 @@ inductive SymbolKind where
   | local
   deriving BEq
 
+/-- A parameter or local binding, with its storage slot, value kind, and declaration span. -/
 structure Symbol where
   kind : SymbolKind
-  operand : IR.Operand
+  slot : IR.SlotId
   valueKind : IR.ValueKind
   span : Span
   deriving BEq
 
+/-- A lexical scope with enclosing scopes ordered from nearest to outermost. -/
 structure Scope where
   private current : Std.HashMap String Symbol := {}
   private parents : List (Std.HashMap String Symbol) := []
 
+/-- Returns an empty scope with no enclosing scopes. -/
 def Scope.empty : Scope := {}
 
--- The caller keeps its scope. Returning from a nested block discards the child.
+/--
+Returns an empty child scope enclosed by `scope`.
+The caller retains `scope` and discards the child when leaving the nested block.
+-/
 def Scope.enter (scope : Scope) : Scope :=
   { parents := scope.current :: scope.parents }
 
+/-- Returns the nearest binding of `name`, or `none` if no enclosing scope declares it. -/
 def Scope.find? (scope : Scope) (name : String) : Option Symbol :=
   scope.current[name]? <|> scope.parents.findSome? (·[name]?)
 
+/--
+Adds a binding to the current scope, allowing it to shadow an enclosing binding.
+Returns a diagnostic at `symbol.span` if the current scope already declares `name`.
+-/
 def Scope.declare (scope : Scope) (name : String) (symbol : Symbol) :
     Except Diagnostic Scope := do
   if scope.current.contains name then
