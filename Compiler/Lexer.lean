@@ -112,14 +112,28 @@ termination_by pos
 def blockCommentBody : P Unit := fun it =>
   scanBlockComment it.2
 
+/-- Consumes `//` or `/*` and returns its second character. Other input is left unconsumed. -/
+private def commentOpener : P (Option Char) := fun it =>
+  if h : ¬it.2.IsAtEnd then
+    let next := it.2.next h
+    if h' : it.2.get h == '/' ∧ ¬next.IsAtEnd then
+      let c := next.get h'.2
+      if c == '/' || c == '*' then .ok ⟨it.1, next.next h'.2⟩ (some c) else .ok it none
+    else
+      .ok it none
+  else
+    .ok it none
+
 partial def skipTrivia : P Unit := do
   skipWhile isSpace
-  if ← tried (skipStr "//") then
+  match ← commentOpener with
+  | some '/' =>
     skipWhile (· != '\n')
     skipTrivia
-  else if ← tried (skipStr "/*") then
+  | some _ =>
     blockCommentBody
     skipTrivia
+  | none => pure ()
 
 /-! ## Identifiers and keywords -/
 
