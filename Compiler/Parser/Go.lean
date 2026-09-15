@@ -35,14 +35,20 @@ private def symbol (text : String) : P Token := fun it =>
   else
     .err it (.other ("expected '" ++ text ++ "'"))
 
+-- A constant message keeps failures on alternative paths from building strings.
+private def tokenOf (kind : TokenKind) (message : String) : P Token := fun it =>
+  if h : Iterator.hasNext it then
+    let token := Iterator.cur' it h
+    if token.kind == kind then .ok (Iterator.next' it h) token
+    else .err it (.other message)
+  else
+    .err it (.other message)
+
 private def semicolon : P Token :=
-  Parser.label (Parser.satisfy (fun token => token.kind == TokenKind.semicolon))
-    "expected semicolon"
+  tokenOf .semicolon "expected semicolon"
 
 private def identifier (source : Source) : P Syntax.Ident := do
-  let token ← Parser.label
-    (Parser.satisfy (fun token => token.kind == TokenKind.identifier))
-    "expected identifier"
+  let token ← tokenOf .identifier "expected identifier"
   match source.slice? token.span with
   | some text => return ⟨text.copy, token.span⟩
   | none => Parser.fail "invalid identifier span"
@@ -54,17 +60,13 @@ private def packageClause (source : Source) : P Syntax.Ident := do
   return name
 
 private def stringLiteral (source : Source) : P Syntax.Expr := do
-  let token ← Parser.label
-    (Parser.satisfy (fun token => token.kind == TokenKind.stringLiteral))
-    "expected string literal"
+  let token ← tokenOf .stringLiteral "expected string literal"
   match source.slice? token.span with
   | some text => return .stringLiteral text.copy token.span
   | none => Parser.fail "invalid string literal span"
 
 private def intLiteral (source : Source) : P Syntax.Expr := do
-  let token ← Parser.label
-    (Parser.satisfy (fun token => token.kind == TokenKind.intLiteral))
-    "expected integer literal"
+  let token ← tokenOf .intLiteral "expected integer literal"
   match source.slice? token.span with
   | some text => return .intLiteral text.copy token.span
   | none => Parser.fail "invalid integer literal span"
@@ -108,8 +110,11 @@ mutual
       let right ← primary source
       additiveRest source (.binary op left right ⟨left.span.start, right.span.stop⟩)
 
-  private partial def primary (source : Source) : P Syntax.Expr :=
-    stringLiteral source <|> intLiteral source <|> do
+  private partial def primary (source : Source) : P Syntax.Expr := do
+    match ← Parser.peek? with
+    | some { kind := .stringLiteral, .. } => stringLiteral source
+    | some { kind := .intLiteral, .. } => intLiteral source
+    | _ =>
       let name ← identifier source
       unless ← peekSymbol "(" do return .identifier name
       let _ ← symbol "("
@@ -125,8 +130,11 @@ mutual
       arguments := arguments.push (← expression source)
     return arguments
 
-  private partial def statement (source : Source) : P Syntax.Stmt :=
-    returnStatement source <|> ifStatement source <|> do
+  private partial def statement (source : Source) : P Syntax.Stmt := do
+    match ← Parser.peek? with
+    | some { kind := .keyword "return", .. } => returnStatement source
+    | some { kind := .keyword "if", .. } => ifStatement source
+    | _ =>
       let value ← expression source
       statementEnd
       return .expr value
