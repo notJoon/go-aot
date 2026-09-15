@@ -6,8 +6,11 @@ public section
 
 namespace GoAot.Syntax
 
+private instance : Repr String.Slice where
+  reprPrec text prec := reprPrec text.copy prec
+
 structure Ident where
-  text : String
+  text : String.Slice
   span : Span
   deriving Repr, BEq
 
@@ -17,7 +20,7 @@ inductive BinaryOp where
 
 inductive Expr where
   | stringLiteral (text : String) (span : Span)
-  | intLiteral (text : String) (span : Span)
+  | intLiteral (text : String.Slice) (span : Span)
   | identifier (name : Ident)
   | call (callee : Ident) (arguments : Array Expr) (span : Span)
   | binary (op : BinaryOp) (left right : Expr) (span : Span)

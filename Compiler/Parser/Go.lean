@@ -50,7 +50,7 @@ private def semicolon : P Token :=
 private def identifier (source : Source) : P Syntax.Ident := do
   let token ← tokenOf .identifier "expected identifier"
   match source.slice? token.span with
-  | some text => return ⟨text.copy, token.span⟩
+  | some text => return ⟨text, token.span⟩
   | none => Parser.fail "invalid identifier span"
 
 private def packageClause (source : Source) : P Syntax.Ident := do
@@ -68,7 +68,7 @@ private def stringLiteral (source : Source) : P Syntax.Expr := do
 private def intLiteral (source : Source) : P Syntax.Expr := do
   let token ← tokenOf .intLiteral "expected integer literal"
   match source.slice? token.span with
-  | some text => return .intLiteral text.copy token.span
+  | some text => return .intLiteral text token.span
   | none => Parser.fail "invalid integer literal span"
 
 private def peekSymbol (text : String) : P Bool := do

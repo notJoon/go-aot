@@ -5,6 +5,25 @@ import Compiler.IR.Verify
 
 open GoAot
 
+private def sourceView (source : String) (text : String.Slice) (span : Span)
+    (expected : String) : Bool :=
+  text.str == source && text.startInclusive.offset.byteIdx == span.start &&
+    text.endExclusive.offset.byteIdx == span.stop && text == expected.toSlice
+
+#guard Id.run do
+  let source := "package main\nfunc 계산(값 int) int { return 계산(값 + 1_000) }\n"
+  let .ok file := parse (Source.ofString source) | return false
+  let some function := file.functions[0]? | return false
+  let some parameter := function.parameters[0]? | return false
+  let some resultType := function.resultType | return false
+  let some (Syntax.Stmt.return (.call callee arguments _)) := function.body[0]? | return false
+  let some (Syntax.Expr.binary .add (.identifier name) (.intLiteral text span) _) := arguments[0]?
+    | return false
+  return [(file.packageName, "main"), (function.name, "계산"), (parameter.name, "값"),
+    (parameter.typeName, "int"), (resultType, "int"), (callee, "계산"), (name, "값")].all
+      (fun (name, expected) => sourceView source name.text name.span expected) &&
+    sourceView source text span "1_000" && text.toNat? == some 1000
+
 -- Existing phase interfaces reject mixed inputs without result wrappers.
 example : Source → Except Diagnostic Syntax.File := parse
 example : Syntax.File → Except Diagnostic IR.Program := Lowering.lower

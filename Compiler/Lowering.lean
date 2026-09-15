@@ -22,7 +22,7 @@ private structure Signature where
 private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature) := do
   let mut result := #[]
   for function in file.functions do
-    let name := function.name.text
+    let name := function.name.text.copy
     unless IR.validName name do throw (diagnosticAt function.name.span s!"unsupported function name '{name}'")
     if result.any (fun (signature : Signature) => signature.name == name) then
       throw (diagnosticAt function.name.span s!"duplicate function '{name}'")
@@ -31,11 +31,12 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature
     for parameter in function.parameters do
       if parameter.typeName.text != "int" then
         throw (diagnosticAt parameter.typeName.span s!"only int parameters are supported in function '{name}'")
-      unless IR.validName parameter.name.text do
+      let parameterName := parameter.name.text.copy
+      unless IR.validName parameterName do
         throw (diagnosticAt parameter.name.span s!"unsupported parameter name '{parameter.name.text}'")
-      scope ← scope.declare parameter.name.text
+      scope ← scope.declare parameterName
         ⟨.parameter, .argument parameters.size, .int, parameter.name.span⟩
-      parameters := parameters.push parameter.name.text
+      parameters := parameters.push parameterName
     let returnsInt ← match function.resultType with
       | none => pure false
       | some resultType =>
@@ -44,8 +45,8 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Array Signature
     result := result.push ⟨name, parameters, returnsInt, scope⟩
   return result
 
-private def findSignature? (all : Array Signature) (name : String) : Option Signature :=
-  all.find? fun signature => signature.name == name
+private def findSignature? (all : Array Signature) (name : String.Slice) : Option Signature :=
+  all.find? fun signature => signature.name.toSlice == name
 
 private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray :=
   if literal.startsWith "\"" then return Literal.decodeInterpreted literal
@@ -112,7 +113,7 @@ private def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → 
 
 -- A local shadows every function of the same name, including println, as in Go.
 private def checkCallable (scope : Scope) (callee : Syntax.Ident) : Except Diagnostic Unit := do
-  if (scope.find? callee.text).isSome then
+  if (scope.find? callee.text.copy).isSome then
     throw (diagnosticAt callee.span s!"cannot call non-function '{callee.text}'")
 
 private partial def lowerOperand (all : Array Signature) (scope : Scope)
@@ -125,7 +126,7 @@ private partial def lowerOperand (all : Array Signature) (scope : Scope)
       return (.literal value, .int, builder)
     | none => throw (diagnosticAt span s!"unsupported integer literal '{text}'")
   | .identifier name => do
-    let some symbol := scope.find? name.text
+    let some symbol := scope.find? name.text.copy
       | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
     return (symbol.operand, symbol.valueKind, builder)
   | .call callee arguments span => do
@@ -143,7 +144,7 @@ private partial def lowerOperand (all : Array Signature) (scope : Scope)
       unless kind == .int do throw (diagnosticAt argument.span "function arguments must be int")
       lowered := lowered.push value
       builder := next
-    let (value, next) ← builder.emitValue (.call · callee.text lowered)
+    let (value, next) ← builder.emitValue (.call · signature.name lowered)
     return (value, .int, next)
   | .binary op left right span => do
     let (left, leftKind, builder) ← lowerOperand all scope builder left
@@ -208,7 +209,7 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
   let all ← signatures file
   let some main := findSignature? all "main" | throw ⟨.lowering, none, "expected main function"⟩
   unless main.parameters.isEmpty && !main.returnsInt do
-    throw ⟨.lowering, (file.functions.find? (·.name.text == "main")).map (·.span),
+    throw ⟨.lowering, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
       "main must have no parameters or return value"⟩
   let mut functions := #[]
   for function in file.functions do
