@@ -1,6 +1,6 @@
 module
 
-public import Compiler.IR
+public import Compiler.Checked
 public import Compiler.Diagnostic
 import Std.Data.HashMap
 
@@ -13,10 +13,10 @@ inductive SymbolKind where
   | local
   deriving BEq
 
-/-- A parameter or local binding, with its storage slot, value kind, and declaration span. -/
+/-- A parameter or local binding, with its local ID, value kind, and declaration span. -/
 structure Symbol where
   kind : SymbolKind
-  slot : IR.SlotId
+  id : Checked.LocalId
   valueKind : IR.ValueKind
   span : Span
   deriving BEq

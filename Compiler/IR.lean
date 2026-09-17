@@ -49,7 +49,7 @@ inductive Instruction where
   | store (slot : SlotId) (kind : ValueKind) (value : Operand)
   | binary (result : ValueId) (op : Op) (left right : Operand)
   | call (result : ValueId) (name : String) (arguments : Array Operand)
-  -- Source escapes are decoded during lowering so every backend receives identical bytes.
+  -- Source escapes are decoded during checking so every backend receives identical bytes.
   | printString (bytes : ByteArray)
   | printInt (value : Operand)
 

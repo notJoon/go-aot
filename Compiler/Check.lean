@@ -71,7 +71,7 @@ private partial def checkOperand : Syntax.Expr → CheckM (Checked.Expr × IR.Va
   | .identifier name => do
     let some symbol := (← read).scope.find? name.text.copy
       | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-    return (.local symbol.slot, symbol.valueKind)
+    return (.local symbol.id, symbol.valueKind)
   | .call callee arguments span => do
     let name := callee.text.copy
     if let .error error := checkCallable (← read).scope name callee.span then throw error
@@ -153,7 +153,7 @@ mutual
       let (value', kind) ← checkOperand value
       unless kind == symbol.valueKind do
         throw (diagnosticAt value.span "assignment type does not match variable type")
-      return (.assign symbol.slot value', ← read)
+      return (.assign symbol.id value', ← read)
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       let signature := (← read).signature

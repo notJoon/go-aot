@@ -26,6 +26,9 @@ I may change my mind and implement some of these later, but they are not goals f
 
 ![Structure](structure_adr.JPG)
 
+Compilation parses source into syntax, checks names and types into a resolved tree,
+then lowers that tree to IR. IR verification runs before either backend.
+
 ## Backends
 
 The CLI temporarily uses the C backend by default while the LLVM path is validated.
