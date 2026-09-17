@@ -16,7 +16,7 @@ private def diagnosticAt (span : Span) (message : String) : Diagnostic :=
 private structure Signature where
   name : String
   parameters : Array String
-  returnsInt : Bool
+  returnKind : IR.ReturnKind
   -- Retain the body scope here to preserve duplicate parameter diagnostic order
   -- without rebuilding it before body lowering.
   scope : Scope
@@ -39,12 +39,12 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap Str
       scope ← scope.declare parameterName
         ⟨.parameter, parameters.size, .int, parameter.name.span⟩
       parameters := parameters.push parameterName
-    let returnsInt ← match function.resultType with
-      | none => pure false
+    let returnKind ← match function.resultType with
+      | none => pure .void
       | some resultType =>
-        if resultType.text == "int" then pure true
+        if resultType.text == "int" then pure .int
         else throw (diagnosticAt resultType.span s!"only int return values are supported in function '{name}'")
-    result := result.insert name ⟨name, parameters, returnsInt, scope⟩
+    result := result.insert name ⟨name, parameters, returnKind, scope⟩
   return result
 
 private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray :=
@@ -95,6 +95,11 @@ private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
 @[inline] private def withScope (scope : Scope) (action : LowerM α) : LowerM α :=
   withReader (fun context => { context with scope }) action
 
+private def checkCallable (scope : Scope) (name : String) (span : Span) : Except Diagnostic Unit := do
+  -- A local shadows every function of the same name, including println, as in Go.
+  if (scope.find? name).isSome then
+    throw (diagnosticAt span s!"cannot call non-function '{name}'")
+
 private structure LoweredOperand where
   operand : IR.Operand
   kind : IR.ValueKind
@@ -112,12 +117,10 @@ private partial def lowerOperand : Syntax.Expr → LowerM LoweredOperand
     return ⟨value, symbol.valueKind⟩
   | .call callee arguments span => do
     let name := callee.text.copy
-    -- A local shadows every function of the same name, including println, as in Go.
-    if ((← read).scope.find? name).isSome then
-      throw (diagnosticAt callee.span s!"cannot call non-function '{name}'")
+    if let .error error := checkCallable (← read).scope name callee.span then throw error
     let some signature := (← read).all[name]?
       | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
-    unless signature.returnsInt do
+    unless signature.returnKind == .int do
       throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
     if arguments.size != signature.parameters.size then
       throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
@@ -140,6 +143,22 @@ private partial def lowerOperand : Syntax.Expr → LowerM LoweredOperand
     let value ← emitValue (.binary · op left right)
     return ⟨value, kind⟩
   | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
+
+private def lowerPrintln (callee : Syntax.Ident) (arguments : Array Syntax.Expr)
+    (span : Span) : LowerM Context := do
+  let name := callee.text.copy
+  if let .error error := checkCallable (← read).scope name callee.span then throw error
+  if name != "println" then
+    throw (diagnosticAt callee.span "only println calls may be used as statements")
+  let #[argument] := arguments
+    | throw (diagnosticAt span "println expects one argument")
+  match argument with
+    | .stringLiteral literal span =>
+      updateContext (·.emit (.printString (← decodeString literal span)))
+    | _ => do
+      let ⟨value, kind⟩ ← lowerOperand argument
+      unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
+      updateContext (·.emit (.printInt value))
 
 private def lowerDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ident)
     (initializer : Option Syntax.Expr) : LowerM Context := do
@@ -172,22 +191,7 @@ private def lowerCondition (condition : Syntax.Expr) (message : String) : LowerM
 
 mutual
   private partial def lowerStatement : Syntax.Stmt → LowerM Context
-    | .expr (.call callee arguments span) => do
-      let name := callee.text.copy
-      if ((← read).scope.find? name).isSome then
-        throw (diagnosticAt callee.span s!"cannot call non-function '{name}'")
-      if name != "println" then
-        throw (diagnosticAt callee.span "only println calls may be used as statements")
-      let some argument := arguments[0]?
-        | throw (diagnosticAt span "println expects one argument")
-      if arguments.size != 1 then throw (diagnosticAt span "println expects one argument")
-      match argument with
-        | .stringLiteral literal span =>
-          updateContext (·.emit (.printString (← decodeString literal span)))
-        | _ => do
-          let ⟨value, kind⟩ ← lowerOperand argument
-          unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
-          updateContext (·.emit (.printInt value))
+    | .expr (.call callee arguments span) => lowerPrintln callee arguments span
     | .varDeclaration name typeName initializer =>
       lowerDeclaration name typeName initializer
     | .assignment name value => do
@@ -200,7 +204,7 @@ mutual
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       let signature := (← read).signature
-      unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
+      unless signature.returnKind == .int do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
       let ⟨operand, kind⟩ ← lowerOperand value
       unless kind == .int do throw (diagnosticAt value.span "return value must be int")
       updateContext (·.terminate (.ret (some operand)))
@@ -324,14 +328,14 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
   if file.packageName.text != "main" then throw (diagnosticAt file.packageName.span "expected package main")
   let all ← signatures file
   let some main := all["main"]? | throw ⟨.lowering, none, "expected main function"⟩
-  unless main.parameters.isEmpty && !main.returnsInt do
+  unless main.parameters.isEmpty && main.returnKind == .void do
     throw ⟨.lowering, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
       "main must have no parameters or return value"⟩
   let mut functions := #[]
   for function in file.functions do
     let some signature := all[function.name.text.copy]?
       | throw (diagnosticAt function.name.span "internal error: missing function signature")
-    if signature.name != "main" && !signature.returnsInt then
+    if signature.name != "main" && signature.returnKind != .int then
       throw (diagnosticAt function.name.span s!"function '{signature.name}' must return int")
     -- Parameter slot IDs match argument indices, as reserved by signatures.
     -- Copy arguments once so parameter assignments share the local variable path.
@@ -339,14 +343,16 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
     for index in [:signature.parameters.size] do
       initial ← initial.emit (.store index .int (.argument index))
     let (_, builder) ← ((lowerStatements function.body).run ⟨all, signature, signature.scope⟩).run initial
-    if signature.returnsInt then
-      unless isTerminating function.body do
-        throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
     -- A valid int function either returns or loops forever on every path.
-    let builder ← if signature.returnsInt then pure builder else builder.terminate (.ret none)
+    let builder ← match signature.returnKind with
+      | .int => do
+        unless isTerminating function.body do
+          throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
+        pure builder
+      | .void => builder.terminate (.ret none)
     let blocks ← builder.finish
     functions := functions.push ⟨signature.name, signature.parameters,
-      if signature.returnsInt then .int else .void, blocks⟩
+      signature.returnKind, blocks⟩
   return ⟨functions⟩
 
 end GoAot.Lowering

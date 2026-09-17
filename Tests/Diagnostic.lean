@@ -48,6 +48,14 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
 #guard utf8Expected.render utf8Source == "2:39: unknown identifier 'missing'"
 #guard (utf8Source.slice? utf8Expected.span?.get!).map (·.copy) == some "missing"
 
+#guard ["println()", "println(1, 2)"].all fun call =>
+  let before := "package main\nfunc main() { "
+  let source := Source.ofString (before ++ call ++ " }")
+  let expected : Diagnostic := ⟨.lowering,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + call.utf8ByteSize⟩,
+    "println expects one argument"⟩
+  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
 #guard [("package main\nfunc f() int { return 1; println(", "); return 2 }\nfunc main() {}",
       "missing", "unknown identifier 'missing'"),
     ("package main\nfunc f() int { return 1; if 0 < 1 { println(", ") }; return 2 }\nfunc main() {}",
