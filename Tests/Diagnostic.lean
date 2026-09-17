@@ -1,5 +1,6 @@
 import GoAot
 import Compiler.Lowering
+import Compiler.Check
 
 open GoAot
 
@@ -14,7 +15,7 @@ private def failsWith (result : Except Diagnostic α) (expected : Diagnostic) : 
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + literal.utf8ByteSize⟩,
     "integer literal exceeds signed 64-bit range"⟩
-  failsWith (parse source >>= Lowering.lower) expected &&
+  failsWith (parse source >>= Check.check) expected &&
     failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
 
 -- Check stage provenance survives both parser composition and public compile entry points.
@@ -27,7 +28,7 @@ private def failsWith (result : Except Diagnostic α) (expected : Diagnostic) : 
     ("package main\n", .mk .lowering none "expected main function",
       "expected main function")].all fun (text, expected, rendered) =>
   let source := Source.ofString text
-  failsWith (parse source >>= Lowering.lower) expected &&
+  failsWith (parse source >>= Check.check) expected &&
   failsWith (compileToC source) expected &&
   failsWith (compileToLLVM source) expected &&
   expected.render source == rendered &&
@@ -41,7 +42,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
   some ⟨beforeName.utf8ByteSize, beforeName.utf8ByteSize + 7⟩, "unknown identifier 'missing'"⟩
 
 #guard match parse utf8Source with
-  | .ok file => failsWith (Lowering.lower file) utf8Expected
+  | .ok file => failsWith (Check.check file) utf8Expected
   | .error _ => false
 #guard failsWith (compileToC utf8Source) utf8Expected
 #guard failsWith (compileToLLVM utf8Source) utf8Expected

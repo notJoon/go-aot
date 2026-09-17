@@ -1,8 +1,8 @@
 module
 
-public import Compiler.IR
+public import Compiler.Checked
 public import Compiler.Diagnostic
-import Std.Data.HashMap
+import Lean.Data.PersistentHashMap
 
 public section
 
@@ -13,18 +13,20 @@ inductive SymbolKind where
   | local
   deriving BEq
 
-/-- A parameter or local binding, with its storage slot, value kind, and declaration span. -/
+/-- A parameter or local binding, with its local ID, value kind, and declaration span. -/
 structure Symbol where
   kind : SymbolKind
-  slot : IR.SlotId
+  id : Checked.LocalId
   valueKind : IR.ValueKind
   span : Span
   deriving BEq
 
 /-- A lexical scope with enclosing scopes ordered from nearest to outermost. -/
 structure Scope where
-  private current : Std.HashMap String Symbol := {}
-  private parents : List (Std.HashMap String Symbol) := []
+  -- Declarations create new scopes while earlier scopes may still be referenced.
+  -- Persistent updates share unchanged nodes instead of copying a bucket array.
+  private current : Lean.PersistentHashMap String Symbol := {}
+  private parents : List (Lean.PersistentHashMap String Symbol) := []
 
 /-- Returns an empty scope with no enclosing scopes. -/
 def Scope.empty : Scope := {}
@@ -38,7 +40,7 @@ def Scope.enter (scope : Scope) : Scope :=
 
 /-- Returns the nearest binding of `name`, or `none` if no enclosing scope declares it. -/
 def Scope.find? (scope : Scope) (name : String) : Option Symbol :=
-  scope.current[name]? <|> scope.parents.findSome? (·[name]?)
+  scope.current.find? name <|> scope.parents.findSome? (·.find? name)
 
 /--
 Adds a binding to the current scope, allowing it to shadow an enclosing binding.
