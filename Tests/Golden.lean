@@ -192,6 +192,11 @@ def goldenMain : IO Unit := do
   checkSameRejection "package main\nfunc f(n int) int { return n }\nfunc main() { println(f()) }\n"
   checkSameRejection "package main\nfunc main() { println(9223372036854775808) }\n"
   for (source, expected) in [
+      ("package main\nfunc f() {}\nfunc main() { println(f()) }\n",
+        "3:23: function 'f' does not return a value"),
+      ("package main\nfunc f() int { return 1 }\nfunc main() { f() }\n",
+        "3:15: function 'f' result is unused"),
+      ("package main\nfunc main() { main() }\n", "2:15: cannot call 'main'"),
       ("package main\nfunc main() { println(1 < 2) }\n", "2:23: println supports only string and int"),
       ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "2:23: return value must be int"),
       ("package main\nfunc main() { if 1 { println(2) } }\n", "2:18: if condition must be bool"),

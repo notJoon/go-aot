@@ -50,6 +50,12 @@ private def emitInstructions (parameters : Array String)
         if index != 0 then output := output ++ ", "
         output := emitOperand parameters output arguments[index]
       output := output ++ ");\n"
+    | .callVoid name arguments =>
+      output := output ++ "    " ++ Symbol.function name ++ "("
+      for h : index in [:arguments.size] do
+        if index != 0 then output := output ++ ", "
+        output := emitOperand parameters output arguments[index]
+      output := output ++ ");\n"
     | .printString bytes =>
       output := emitBytes (output ++ "    fwrite(\"") bytes ++
         "\", 1, " ++ toString bytes.size ++ ", stdout); putchar('\\n');\n"

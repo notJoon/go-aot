@@ -65,6 +65,12 @@ private def emitInstructions (stringIndices : Std.HashMap ByteArray Nat)
         if index != 0 then output := output ++ ", "
         output := emitOperand (output ++ "i64 ") arguments[index]
       output := output ++ ")\n"
+    | .callVoid name arguments =>
+      output := output ++ "  call void @" ++ Symbol.function name ++ "("
+      for h : index in [:arguments.size] do
+        if index != 0 then output := output ++ ", "
+        output := emitOperand (output ++ "i64 ") arguments[index]
+      output := output ++ ")\n"
     | .printString bytes =>
       let index := stringIndices[bytes]!
       output := output ++ "  call void @goaot.print_line(ptr @.str." ++ toString index ++

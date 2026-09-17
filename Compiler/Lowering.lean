@@ -74,6 +74,12 @@ mutual
       emit (.store id kind (← lowerExpr initializer))
     | .printString bytes => emit (.printString bytes)
     | .printInt value => emit (.printInt (← lowerExpr value))
+    | .callVoid id arguments =>
+      let some function := (← read).file.functions[id]? | throw lowerError
+      let mut lowered := #[]
+      for argument in arguments do
+        lowered := lowered.push (← lowerExpr argument)
+      emit (.callVoid function.name lowered)
     | .return value => terminate (.ret (some (← lowerExpr value)))
     | .break => jump (isBreak := true)
     | .continue => jump (isBreak := false)

@@ -71,7 +71,7 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
     ({ intFunction with name := "" }, "unsupported function name ''"),
     ({ intFunction with parameters := #["bad-name"] }, "unsupported parameter name 'bad-name'"),
     ({ intFunction with parameters := #["x", "x"] }, "duplicate parameter 'x'"),
-    ({ intFunction with returnKind := .void }, "function 'f' must return int"),
+    ({ intFunction with returnKind := .void }, "void function cannot return a value"),
     ({ intFunction with blocks := #[] }, "function must have an entry block"),
     ({ intFunction with blocks := #[⟨#[], .ret none⟩] }, "int function must return a value")].all
   fun (function, message) => rejected ⟨#[mainFunction, function]⟩ message
@@ -91,6 +91,8 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
     (.call 0 "missing" #[], "unknown function 'missing'"),
     (.call 0 "f" #[], "function 'f' expects 1 arguments"),
     (.call 0 "main" #[], "function 'main' does not return int"),
+    (.callVoid "main" #[], "cannot call 'main'"),
+    (.callVoid "f" #[intValue], "function 'f' does not return void"),
     (.call 0 "f" #[.argument 0], "argument index 0 is out of range"),
     (.binary 0 .add intValue (.argument 0), "argument index 0 is out of range")].all
   fun (instruction, message) =>
@@ -161,8 +163,9 @@ private def definition : IR.Instruction := .binary 0 .add intValue intValue
   #[⟨#[.binary 100 .add intValue intValue, .binary 7 .subtract (.value 100) intValue,
     .call 42 "f" #[.value 7], .printInt (.value 42)], .ret none⟩] }, intFunction]⟩
 
--- Exercise the backend field contract before source syntax permits non-main void functions.
+-- Exercise the backend field contract for non-main void functions.
 private def voidProgram : IR.Program := ⟨#[mainFunction, { mainFunction with name := "f" }]⟩
+#guard accepted voidProgram
 #guard
   let c := Backend.C.emit voidProgram
   c.contains "int main(void)" && c.contains "return 0;" &&
@@ -325,7 +328,8 @@ private def pendingBuilder (blocks : Array Lowering.PendingBlock)
 
 #guard [
     #[Checked.Stmt.printInt (.local 1)],
-    #[Checked.Stmt.printInt (.call 1 #[])]].all fun body =>
+    #[Checked.Stmt.printInt (.call 1 #[])],
+    #[Checked.Stmt.callVoid 1 #[]]].all fun body =>
   let file : Checked.File := ⟨#[⟨"main", #[], #[], .void, body⟩]⟩
   match Lowering.lower file with
   | .error error => error.message == "internal error: invalid checked syntax"

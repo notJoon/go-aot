@@ -107,8 +107,6 @@ private def checkPrintln (callee : Syntax.Ident) (arguments : Array Syntax.Expr)
     (span : Span) : CheckM Checked.Stmt := do
   let name := callee.text.copy
   if let .error error := checkCallable (← read).scope name callee.span then throw error
-  if name != "println" then
-    throw (diagnosticAt callee.span "only println calls may be used as statements")
   let #[argument] := arguments
     | throw (diagnosticAt span "println expects one argument")
   match argument with
@@ -152,7 +150,24 @@ mutual
     let context ← read
     match statement with
     | .expr (.call callee arguments span) =>
-      return (← checkPrintln callee arguments span, context)
+      if callee.text == "println" then
+        return (← checkPrintln callee arguments span, context)
+      let name := callee.text.copy
+      if let .error error := checkCallable context.scope name callee.span then throw error
+      let some signature := context.all[name]?
+        | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
+      unless signature.returnKind == .void do
+        throw (diagnosticAt callee.span s!"function '{callee.text}' result is unused")
+      if signature.name == "main" then
+        throw (diagnosticAt callee.span "cannot call 'main'")
+      unless arguments.size == signature.parameters.size do
+        throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
+      let mut checked := #[]
+      for argument in arguments do
+        let (value, kind) ← (checkOperand argument).run context
+        unless kind == .int do throw (diagnosticAt argument.span "function arguments must be int")
+        checked := checked.push value
+      return (.callVoid signature.id checked, context)
     | .varDeclaration name typeName initializer => checkDeclaration name typeName initializer
     | .assignment name value => do
       let some symbol := context.scope.find? name.text.copy
@@ -239,8 +254,6 @@ def check (file : Syntax.File) : Except Diagnostic Checked.File := do
   for function in file.functions do
     let some signature := all[function.name.text.copy]?
       | throw (diagnosticAt function.name.span "internal error: missing function signature")
-    if signature.name != "main" && signature.returnKind != .int then
-      throw (diagnosticAt function.name.span s!"function '{signature.name}' must return int")
     let initial := Array.replicate signature.parameters.size IR.ValueKind.int
     let (body, locals) ← ((checkStatements function.body).run
       ⟨all, signature, signature.scope, 0⟩).run initial

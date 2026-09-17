@@ -67,8 +67,6 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
       if function.name == "main" then
         unless function.parameters.isEmpty && function.returnKind == .void do
           throw "main must have no parameters or return value"
-      else if function.returnKind != .int then
-        throw s!"function '{function.name}' must return int"
       let mut parameters : Std.HashSet String := {}
       for parameter in function.parameters do
         unless validName parameter do
@@ -125,6 +123,16 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
       throw s!"function '{name}' expects {callee.parameters.size} arguments"
     for argument in arguments do verifyOperand function state.values .int argument
     defineValue state result .int
+  | .callVoid name arguments =>
+    let some callee := functions[name]?
+      | throw s!"unknown function '{name}'"
+    if name == "main" then throw "cannot call 'main'"
+    if callee.returnKind != .void then
+      throw s!"function '{name}' does not return void"
+    if arguments.size != callee.parameters.size then
+      throw s!"function '{name}' expects {callee.parameters.size} arguments"
+    for argument in arguments do verifyOperand function state.values .int argument
+    return state
   | .printString _ => return state
   | .printInt value =>
     verifyOperand function state.values .int value
