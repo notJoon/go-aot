@@ -62,7 +62,10 @@ private def checkCallable (scope : Scope) (name : String) (span : Span) : Except
   if (scope.find? name).isSome then
     throw (diagnosticAt span s!"cannot call non-function '{name}'")
 
-private partial def checkOperand : Syntax.Expr → CheckM (Checked.Expr × IR.ValueKind)
+-- Expressions only read bindings. Keeping local allocation state out avoids a result/state pair
+-- for every recursive operand check.
+private partial def checkOperand :
+    Syntax.Expr → ReaderT Context (Except Diagnostic) (Checked.Expr × IR.ValueKind)
   | .intLiteral text span => do
     let value := Literal.decodeInt text
     if value > IR.maxSignedInt64 then
@@ -112,7 +115,7 @@ private def checkPrintln (callee : Syntax.Ident) (arguments : Array Syntax.Expr)
     if literal.startsWith "\"" then return .printString (Literal.decodeInterpreted literal)
     else throw (diagnosticAt span "raw string literals are not supported yet")
   | _ => do
-    let (value, kind) ← checkOperand argument
+    let (value, kind) ← (checkOperand argument).run (← read)
     unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
     return .printInt value
 
@@ -127,7 +130,7 @@ private def checkDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ide
     unless typeName.text == "int" do
       throw (diagnosticAt typeName.span "only int variable types are supported")
   let (value, kind) ← match initializer with
-    | some value => checkOperand value
+    | some value => (checkOperand value).run (← read)
     | none => pure (.intLiteral 0, .int)
   if typeName.isSome && kind != .int then
     throw (diagnosticAt ((initializer.map (·.span)).getD name.span) "initializer must be int")
@@ -138,7 +141,7 @@ private def checkDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ide
   return (.declare id value, { context with scope })
 
 private def checkCondition (condition : Syntax.Expr) (message : String) : CheckM Checked.Expr := do
-  let (value, kind) ← checkOperand condition
+  let (value, kind) ← (checkOperand condition).run (← read)
   unless kind == .bool do throw (diagnosticAt condition.span message)
   return value
 
@@ -150,7 +153,7 @@ mutual
     | .assignment name value => do
       let some symbol := (← read).scope.find? name.text.copy
         | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-      let (value', kind) ← checkOperand value
+      let (value', kind) ← (checkOperand value).run (← read)
       unless kind == symbol.valueKind do
         throw (diagnosticAt value.span "assignment type does not match variable type")
       return (.assign symbol.id value', ← read)
@@ -159,7 +162,7 @@ mutual
       let signature := (← read).signature
       unless signature.returnKind == .int do
         throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      let (value', kind) ← checkOperand value
+      let (value', kind) ← (checkOperand value).run (← read)
       unless kind == .int do throw (diagnosticAt value.span "return value must be int")
       return (.return value', ← read)
     | .break span => do

@@ -88,5 +88,7 @@ def performanceMain : IO Unit := do
   let (checkShort, short) ← literalAllocations small
   let (checkLong, long) ← literalAllocations large
   IO.println s!"Check + lower literal allocations: {checkShort + short} -> {checkLong + long} (check {checkShort} -> {checkLong}, lower {short} -> {long})"
-  unless long <= short + 8 * (large - small) do
-    throw (IO.userError "lowering exceeds eight allocations per literal statement")
+  unless checkLong <= checkShort + 5 * (large - small) do
+    throw (IO.userError "checking exceeds five allocations per literal statement")
+  unless long <= short + 6 * (large - small) do
+    throw (IO.userError "lowering exceeds six allocations per literal statement")

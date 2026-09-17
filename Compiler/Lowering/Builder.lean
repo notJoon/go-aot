@@ -35,7 +35,8 @@ def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
   if builder.current.isSome || block.terminator.isSome then throw builderError
   return { builder with current := some target }
 
-def Builder.startStatement (builder : Builder) : Except Diagnostic Builder := do
+-- Inline the usual open-block path so callers need no temporary Except.ok wrapper.
+@[inline] def Builder.startStatement (builder : Builder) : Except Diagnostic Builder := do
   if builder.current.isSome then return builder
   let (target, builder) := builder.newBlock
   builder.selectBlock target
