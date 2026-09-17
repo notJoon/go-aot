@@ -56,6 +56,107 @@ private structure BlockState where
   /-- Slots declared so far in the entry block, retained when checking subsequent blocks. -/
   slots : Std.HashMap SlotId ValueKind := {}
 
+private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMap String Function) := do
+  let mut functions : Std.HashMap String Function := {}
+  for function in program.functions do
+    let checked : Except String Unit := do
+      unless validName function.name do
+        throw s!"unsupported function name '{function.name}'"
+      if functions.contains function.name then
+        throw s!"duplicate function '{function.name}'"
+      if function.name == "main" then
+        unless function.parameters.isEmpty && function.returnKind == .void do
+          throw "main must have no parameters or return value"
+      else if function.returnKind != .int then
+        throw s!"function '{function.name}' must return int"
+      let mut parameters : Std.HashSet String := {}
+      for parameter in function.parameters do
+        unless validName parameter do
+          throw s!"unsupported parameter name '{parameter}'"
+        if parameters.contains parameter then
+          throw s!"duplicate parameter '{parameter}'"
+        parameters := parameters.insert parameter
+      if function.blocks.isEmpty then
+        throw "function must have an entry block"
+    checked.mapError fun message => { message, function? := some function.name }
+    functions := functions.insert function.name function
+  unless functions.contains "main" do throw { message := "expected main function" }
+  return functions
+
+@[inline] private def defineValue (state : BlockState) (result : ValueId)
+    (kind : ValueKind) : Except String BlockState := do
+  if state.definitions.contains result then
+    throw s!"value {result} is defined more than once"
+  return { state with
+    definitions := state.definitions.insert result
+    values := state.values.insert result kind }
+
+@[inline] private def verifySlot (state : BlockState) (slot : SlotId)
+    (kind : ValueKind) : Except String Unit := do
+  let some declaredKind := state.slots[slot]?
+    | throw s!"slot {slot} is not declared earlier in the entry block"
+  if kind != declaredKind then throw s!"slot {slot} type mismatch"
+
+@[inline] private def verifyInstruction (functions : Std.HashMap String Function)
+    (function : Function) (blockIndex : BlockId) (state : BlockState)
+    (instruction : Instruction) : Except String BlockState := do
+  match instruction with
+  | .alloca slot kind =>
+    if blockIndex != 0 then throw "slots must be allocated in the entry block"
+    if state.slots.contains slot then throw s!"slot {slot} is declared more than once"
+    return { state with slots := state.slots.insert slot kind }
+  | .load result slot kind =>
+    verifySlot state slot kind
+    defineValue state result kind
+  | .store slot kind value =>
+    verifySlot state slot kind
+    verifyOperand function state.values kind value
+    return state
+  | .binary result op left right =>
+    verifyOperand function state.values .int left
+    verifyOperand function state.values .int right
+    defineValue state result (match op with | .less => .bool | _ => .int)
+  | .call result name arguments =>
+    let some callee := functions[name]?
+      | throw s!"unknown function '{name}'"
+    if callee.returnKind != .int then
+      throw s!"function '{name}' does not return int"
+    if arguments.size != callee.parameters.size then
+      throw s!"function '{name}' expects {callee.parameters.size} arguments"
+    for argument in arguments do verifyOperand function state.values .int argument
+    defineValue state result .int
+  | .printString _ => return state
+  | .printInt value =>
+    verifyOperand function state.values .int value
+    return state
+
+@[inline] private def verifyTerminator (function : Function)
+    (values : Std.HashMap ValueId ValueKind) (terminator : Terminator) : Except String Unit := do
+  match terminator with
+  | .br target => verifyTarget function target
+  | .condBr condition ifTrue ifFalse =>
+    verifyOperand function values .bool condition
+    verifyTarget function ifTrue
+    verifyTarget function ifFalse
+  | .ret value =>
+    match function.returnKind, value with
+    | .void, none => pure ()
+    | .int, some value => verifyOperand function values .int value
+    | .void, some _ => throw "void function cannot return a value"
+    | .int, none => throw "int function must return a value"
+
+private def verifyBlock (functions : Std.HashMap String Function) (function : Function)
+    (blockIndex : BlockId) (block : Block) (previous : BlockState) : Except VerifyError BlockState := do
+  let mut state := { previous with values := {} }
+  for h : instructionIndex in [:block.instructions.size] do
+    let instruction := block.instructions[instructionIndex]
+    state ← (verifyInstruction functions function blockIndex state instruction).mapError fun message =>
+      { message, function? := some function.name, block? := some blockIndex,
+        instruction? := some instructionIndex }
+  (verifyTerminator function state.values block.terminator).mapError fun message =>
+    { message, function? := some function.name, block? := some blockIndex, terminator := true }
+  return state
+
 /--
 Checks function signatures, control flow, value definitions, and operand kinds.
 Slots must be declared once in the entry block before use, and accesses must match their kinds.
@@ -63,97 +164,10 @@ Slot initialization is the responsibility of lowering and is not checked here.
 Returns the first error with its function, block, and instruction or terminator location.
 -/
 def verify (program : Program) : Except VerifyError Unit := do
-  let mut functions : Std.HashMap String Function := {}
+  let functions ← verifyFunctions program
   for function in program.functions do
-    let location : VerifyError := { message := "", function? := some function.name }
-    unless validName function.name do
-      throw { location with message := s!"unsupported function name '{function.name}'" }
-    if functions.contains function.name then
-      throw { location with message := s!"duplicate function '{function.name}'" }
-    functions := functions.insert function.name function
-    if function.name == "main" then
-      unless function.parameters.isEmpty && function.returnKind == .void do
-        throw { location with message := "main must have no parameters or return value" }
-    else if function.returnKind != .int then
-      throw { location with message := s!"function '{function.name}' must return int" }
-    let mut parameters : Array String := #[]
-    for parameter in function.parameters do
-      unless validName parameter do
-        throw { location with message := s!"unsupported parameter name '{parameter}'" }
-      if parameters.contains parameter then
-        throw { location with message := s!"duplicate parameter '{parameter}'" }
-      parameters := parameters.push parameter
-    if function.blocks.isEmpty then
-      throw { location with message := "function must have an entry block" }
-  unless functions.contains "main" do throw { message := "expected main function" }
-  for function in program.functions do
-    let mut definitions : Std.HashSet ValueId := {}
-    let mut slots : Std.HashMap SlotId ValueKind := {}
+    let mut state : BlockState := { definitions := {} }
     for h : blockIndex in [:function.blocks.size] do
-      let block := function.blocks[blockIndex]
-      -- One loop state avoids repacking the maps after instructions that change no definitions.
-      let mut state : BlockState := { definitions, slots }
-      for h : instructionIndex in [:block.instructions.size] do
-        let instruction := block.instructions[instructionIndex]
-        let checked : Except String Unit := do
-          match instruction with
-          | .alloca slot _ =>
-            if blockIndex != 0 then throw "slots must be allocated in the entry block"
-            if state.slots.contains slot then throw s!"slot {slot} is declared more than once"
-          | .load _ slot kind | .store slot kind _ =>
-            let some declaredKind := state.slots[slot]?
-              | throw s!"slot {slot} is not declared earlier in the entry block"
-            if kind != declaredKind then throw s!"slot {slot} type mismatch"
-            if let .store _ _ value := instruction then
-              verifyOperand function state.values kind value
-          | .binary _ _ left right =>
-            verifyOperand function state.values .int left
-            verifyOperand function state.values .int right
-          | .call _ name arguments =>
-            let some callee := functions[name]?
-              | throw s!"unknown function '{name}'"
-            if callee.returnKind != .int then
-              throw s!"function '{name}' does not return int"
-            if arguments.size != callee.parameters.size then
-              throw s!"function '{name}' expects {callee.parameters.size} arguments"
-            for argument in arguments do verifyOperand function state.values .int argument
-          | .printString _ => pure ()
-          | .printInt value => verifyOperand function state.values .int value
-        checked.mapError fun message =>
-          { message, function? := some function.name, block? := some blockIndex,
-            instruction? := some instructionIndex }
-        match instruction with
-        | .alloca slot kind => state := { state with slots := state.slots.insert slot kind }
-        | .binary result .. | .call result .. | .load result .. =>
-          if state.definitions.contains result then
-            throw {
-              message := s!"value {result} is defined more than once"
-              function? := some function.name, block? := some blockIndex,
-              instruction? := some instructionIndex }
-          let kind := match instruction with
-            | .binary _ .less .. => .bool
-            | .load _ _ kind => kind
-            | _ => .int
-          state := { state with
-            definitions := state.definitions.insert result
-            values := state.values.insert result kind }
-        | _ => pure ()
-      definitions := state.definitions
-      slots := state.slots
-      let checked : Except String Unit := do
-        match block.terminator with
-        | .br target => verifyTarget function target
-        | .condBr condition ifTrue ifFalse =>
-          verifyOperand function state.values .bool condition
-          verifyTarget function ifTrue
-          verifyTarget function ifFalse
-        | .ret value =>
-          match function.returnKind, value with
-          | .void, none => pure ()
-          | .int, some value => verifyOperand function state.values .int value
-          | .void, some _ => throw "void function cannot return a value"
-          | .int, none => throw "int function must return a value"
-      checked.mapError fun message =>
-        { message, function? := some function.name, block? := some blockIndex, terminator := true }
+      state ← verifyBlock functions function blockIndex function.blocks[blockIndex] state
 
 end GoAot.IR
