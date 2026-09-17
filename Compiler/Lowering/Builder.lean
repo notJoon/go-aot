@@ -35,7 +35,7 @@ def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
   if builder.current.isSome || block.terminator.isSome then throw builderError
   return { builder with current := some target }
 
--- Inline the usual open-block path so callers need no temporary Except.ok wrapper.
+/-- Select a fresh unconnected block only when the previous source path has ended. -/
 @[inline] def Builder.startStatement (builder : Builder) : Except Diagnostic Builder := do
   if builder.current.isSome then return builder
   let (target, builder) := builder.newBlock
@@ -46,6 +46,7 @@ def Builder.emit (builder : Builder) (instruction : IR.Instruction) :
   let some current := builder.current | throw builderError
   let some block := builder.blocks[current]? | throw builderError
   if block.terminator.isSome then throw builderError
+  -- Updating inside `modify` avoids copying the instruction array on each append.
   let blocks := builder.blocks.modify current fun block =>
     { block with instructions := block.instructions.push instruction }
   return { builder with blocks }
@@ -59,6 +60,7 @@ def Builder.terminate (builder : Builder) (terminator : IR.Terminator) :
     blocks := builder.blocks.set! current { block with terminator := some terminator }
     current := none }
 
+/-- Connect an open path to `target`, leaving a terminated path untouched. -/
 def Builder.branchIfOpen (builder : Builder) (target : IR.BlockId) :
     Except Diagnostic Builder := do
   if builder.current.isNone then return builder
@@ -78,7 +80,8 @@ def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → IR.Instr
   let builder ← builder.emit (instruction id)
   return (.value id, { builder with nextValue := id + 1 })
 
-/-- Keep only blocks reachable from entry and preserve their relative order. -/
+/-- Keep entry reachable blocks in their existing order and renumber their branches.
+Unreachable blocks may be unterminated. Value IDs remain unchanged. -/
 def Builder.finish (builder : Builder) : Except Diagnostic (Array IR.Block) := do
   unless builder.loops.isEmpty do throw builderError
   let mut visited := Array.replicate builder.blocks.size false

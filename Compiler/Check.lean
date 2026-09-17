@@ -18,6 +18,7 @@ private structure Signature where
   name : String
   parameters : Array String
   returnKind : IR.ReturnKind
+  -- Retain parameter bindings for lookup and duplicate declarations in the body.
   scope : Scope
 
 private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap String Signature) := do
@@ -129,6 +130,7 @@ private def checkDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ide
   if let some typeName := typeName then
     unless typeName.text == "int" do
       throw (diagnosticAt typeName.span "only int variable types are supported")
+  -- The initializer cannot see the binding being declared.
   let (value, kind) ← match initializer with
     | some value => (checkOperand value).run (← read)
     | none => pure (.intLiteral 0, .int)
@@ -219,9 +221,11 @@ private partial def hasOwnBreak (statements : Array Syntax.Stmt) : Bool :=
     | .break _ => true
     | .ifThen _ yes elseBody =>
       hasOwnBreak yes || (elseBody.map hasOwnBreak).getD false
+    -- A nested loop consumes its own break.
     | .forLoop .. => false
     | .varDeclaration .. | .assignment .. | .expr _ | .return _ | .continue _ => false
 
+-- Return rules describe source syntax, even when CFG edges later make a path unreachable.
 private partial def isTerminating (statements : Array Syntax.Stmt) : Bool :=
   match statements.back? with
   | some (.return _) => true
@@ -229,8 +233,11 @@ private partial def isTerminating (statements : Array Syntax.Stmt) : Bool :=
   | some (.forLoop _ none _ body) => !hasOwnBreak body
   | _ => false
 
+/-- Check the whole source, including unreachable statements, and resolve names to stable IDs.
+User diagnostics retain the public `lowering` phase. -/
 def check (file : Syntax.File) : Except Diagnostic Checked.File := do
   if file.packageName.text != "main" then throw (diagnosticAt file.packageName.span "expected package main")
+  -- Collect every signature before checking bodies to allow forward calls and recursion.
   let all ← signatures file
   let some main := all["main"]? | throw ⟨.lowering, none, "expected main function"⟩
   unless main.parameters.isEmpty && main.returnKind == .void do

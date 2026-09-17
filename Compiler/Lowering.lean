@@ -17,6 +17,7 @@ private structure Context where
 
 private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
 
+-- Pass the builder directly so reading state does not retain aliases to its arrays.
 @[inline] private def runBuilder (operation : Builder → Except Diagnostic (α × Builder)) : LowerM α :=
   fun _ builder => operation builder
 
@@ -65,6 +66,7 @@ private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
 
 mutual
   private partial def lowerStatement (statement : Checked.Stmt) : LowerM Unit := do
+    -- A statement after a terminator starts an unconnected block that `finish` can discard.
     startStatement
     match statement with
     | .declare id initializer | .assign id initializer =>
@@ -87,6 +89,7 @@ mutual
         branchIfOpen elseBlock
         selectBlock elseBlock
       | some statements =>
+        -- The continuation may have no incoming live edge when both arms return.
         let continuation ← newBlock
         branchIfOpen continuation
         selectBlock elseBlock
@@ -98,6 +101,7 @@ mutual
       let header ← newBlock
       let loopBody ← newBlock
       let exit ← newBlock
+      -- `continue` must have a fixed destination even before the body is lowered.
       let postBlock ← if post.isSome then some <$> newBlock else pure none
       branchIfOpen header
       selectBlock header
@@ -119,9 +123,11 @@ mutual
     for statement in statements do lowerStatement statement
 end
 
+/-- Build CFGs from checked syntax. Invalid IDs are internal errors. -/
 def lower (file : Checked.File) : Except Diagnostic IR.Program := do
   let mut functions := #[]
   for function in file.functions do
+    -- All slots are allocated at entry. Declaration stores stay at their source sites.
     let mut initial : Builder := { slots := function.locals }
     for index in [:function.parameters.size] do
       initial ← initial.emit (.store index .int (.argument index))
