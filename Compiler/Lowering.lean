@@ -3,6 +3,7 @@ module
 public import Compiler.Scope
 public import Compiler.Parser.Go
 import Compiler.Literal
+import Compiler.Lowering.Builder
 import Std.Data.HashMap
 
 public section
@@ -49,103 +50,6 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap Str
 private def decodeString (literal : String) (span : Span) : Except Diagnostic ByteArray :=
   if literal.startsWith "\"" then return Literal.decodeInterpreted literal
   else throw (diagnosticAt span "raw string literals are not supported yet")
-
-private structure PendingBlock where
-  instructions : Array IR.Instruction := #[]
-  terminator : Option IR.Terminator := none
-
-private structure LoopContext where
-  -- Targets are allocated when a live branch first needs them.
-  breakTarget : Option IR.BlockId
-  continueTarget : Option IR.BlockId
-
-private structure Builder where
-  blocks : Array PendingBlock := #[{}]
-  current : Option IR.BlockId := some 0
-  nextValue : IR.ValueId := 0
-  /-- Slot kinds indexed by slot ID, emitted as entry block allocations by `Builder.finish`. -/
-  slots : Array IR.ValueKind := #[]
-  loops : List LoopContext := []
-
-private def builderError : Diagnostic :=
-  ⟨.lowering, none, "internal error: invalid CFG builder state"⟩
-
-private def Builder.newBlock (builder : Builder) : IR.BlockId × Builder :=
-  (builder.blocks.size, { builder with blocks := builder.blocks.push {} })
-
--- A closed path has no current block, so emitting there is a no-op rather than an error.
--- Keeping that rule here means statement lowering never repeats the reachability test.
-private def Builder.emit (builder : Builder) (instruction : IR.Instruction) :
-    Except Diagnostic Builder := do
-  let some current := builder.current | return builder
-  let some block := builder.blocks[current]? | throw builderError
-  if block.terminator.isSome then throw builderError
-  -- `block` above shares the instruction array with `blocks`. Pushing through it copied the whole
-  -- array on every emit. `modify` takes the element out first, allowing the push to happen in place.
-  let blocks := builder.blocks.modify current fun block =>
-    { block with instructions := block.instructions.push instruction }
-  return { builder with blocks }
-
-private def Builder.terminate (builder : Builder) (terminator : IR.Terminator) :
-    Except Diagnostic Builder := do
-  let some current := builder.current | return builder
-  let some block := builder.blocks[current]? | throw builderError
-  if block.terminator.isSome then throw builderError
-  return { builder with
-    blocks := builder.blocks.set! current { block with terminator := some terminator }
-    current := none }
-
-private def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
-    Except Diagnostic Builder := do
-  let some block := builder.blocks[target]? | throw builderError
-  if builder.current.isSome || block.terminator.isSome then throw builderError
-  return { builder with current := some target }
-
-private def Builder.suspend (builder : Builder) : Option IR.BlockId × Builder :=
-  (builder.current, { builder with current := none })
-
-private def Builder.popLoop (builder : Builder) : Except Diagnostic (LoopContext × Builder) := do
-  let context :: rest := builder.loops | throw builderError
-  return (context, { builder with loops := rest })
-
-private def Builder.jump (builder : Builder) (isBreak : Bool) : Except Diagnostic Builder := do
-  let context :: rest := builder.loops | throw builderError
-  if builder.current.isNone then return builder
-
-  let existing := if isBreak then context.breakTarget else context.continueTarget
-  let (target, builder) := match existing with
-    | some target => (target, builder)
-    | none =>
-      let (target, builder) := builder.newBlock
-      let context := if isBreak then { context with breakTarget := some target }
-        else { context with continueTarget := some target }
-      (target, { builder with loops := context :: rest })
-
-  builder.terminate (.br target)
-
-/--
-Finalizes terminated blocks and prepends slot allocations to the entry block.
-Keeping allocations there makes them dominate all uses and lets LLVM promote them.
-Initialization stores remain at their source declaration sites.
--/
-private def Builder.finish (builder : Builder) : Except Diagnostic (Array IR.Block) := do
-  if builder.current.isSome || !builder.loops.isEmpty then throw builderError
-  let blocks := builder.blocks.modify 0 fun block =>
-    let allocations := builder.slots.mapIdx fun slot kind => IR.Instruction.alloca slot kind
-    { block with instructions := allocations ++ block.instructions }
-  blocks.mapM fun block => do
-    let some terminator := block.terminator | throw builderError
-    return ⟨block.instructions, terminator⟩
-
-private def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → IR.Instruction) :
-    Except Diagnostic (IR.Operand × Builder) := do
-  -- Unlike emit, this cannot delegate: a closed path must not consume a value id, and
-  -- returning `.value` would name a definition that never exists. Dead source still checks
-  -- kinds, but the placeholder is discarded by emit and never enters the live CFG.
-  if builder.current.isNone then return (.literal 0, builder)
-  let id := builder.nextValue
-  let builder ← builder.emit (instruction id)
-  return (.value id, { builder with nextValue := id + 1 })
 
 -- A local shadows every function of the same name, including println, as in Go.
 private def checkCallable (scope : Scope) (name : String) (span : Span) : Except Diagnostic Unit := do
@@ -232,7 +136,7 @@ private def lowerCondition (all : Std.HashMap String Signature) (scope : Scope)
 
 mutual
   private partial def lowerStatement (all : Std.HashMap String Signature) (signature : Signature)
-      (scope : Scope) (builder : Builder) : Syntax.Stmt → Except Diagnostic Builder
+      (scope : Scope) (builder : Builder) : Syntax.Stmt → Except Diagnostic (Scope × Builder)
     | .expr (.call callee arguments span) => do
       let name := callee.text.copy
       checkCallable scope name callee.span
@@ -248,42 +152,42 @@ mutual
           let ⟨value, kind, builder⟩ ← lowerOperand all scope builder argument
           unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
           pure (.printInt value, builder)
-      builder.emit instruction
-    -- Declarations update scope in lowerStatements or a for initializer.
-    | .varDeclaration .. => throw builderError
+      return (scope, ← builder.emit instruction)
+    | .varDeclaration name typeName initializer =>
+      lowerDeclaration all scope builder name typeName initializer
     | .assignment name value => do
       let some symbol := scope.find? name.text.copy
         | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
       let ⟨operand, kind, builder⟩ ← lowerOperand all scope builder value
       unless kind == symbol.valueKind do
         throw (diagnosticAt value.span "assignment type does not match variable type")
-      builder.emit (.store symbol.slot kind operand)
+      return (scope, ← builder.emit (.store symbol.slot kind operand))
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
       unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
       let ⟨operand, kind, builder⟩ ← lowerOperand all scope builder value
       unless kind == .int do throw (diagnosticAt value.span "return value must be int")
-      builder.terminate (.ret (some operand))
+      return (scope, ← builder.terminate (.ret (some operand)))
     | .break span => do
       if builder.loops.isEmpty then throw (diagnosticAt span "break outside loop")
-      builder.jump (isBreak := true)
+      return (scope, ← builder.jump (isBreak := true))
     | .continue span => do
       if builder.loops.isEmpty then throw (diagnosticAt span "continue outside loop")
-      builder.jump (isBreak := false)
+      return (scope, ← builder.jump (isBreak := false))
     | .ifThen condition body elseBody => do
       let ⟨operand, _, builder⟩ ← lowerCondition all scope builder condition "if condition must be bool"
       -- Closed paths still check source semantics, without reserving unreachable blocks.
       if builder.current.isNone then
         let builder ← lowerStatements all signature scope.enter builder body
         match elseBody with
-        | some statements => return ← lowerStatements all signature scope.enter builder statements
-        | none => return builder
+        | some statements => return (scope, ← lowerStatements all signature scope.enter builder statements)
+        | none => return (scope, builder)
       let (thenBlock, builder) := builder.newBlock
       let (elseBlock, builder) := builder.newBlock
       let builder ← builder.terminate (.condBr operand thenBlock elseBlock)
       let builder ← builder.selectBlock thenBlock
       let builder ← lowerStatements all signature scope.enter builder body
-      match elseBody with
+      let builder ← match elseBody with
       | none => do
         let builder ← builder.terminate (.br elseBlock)
         builder.selectBlock elseBlock
@@ -291,23 +195,21 @@ mutual
           let (thenOpen, builder) := builder.suspend
           let builder ← builder.selectBlock elseBlock
           let builder ← lowerStatements all signature scope.enter builder statements
-          if thenOpen.isNone && builder.current.isNone then return builder
-          let (continuation, builder) := builder.newBlock
-          let builder ← builder.terminate (.br continuation)
-          let builder ← match thenOpen with
-            | some block => do
-              let builder ← builder.selectBlock block
-              builder.terminate (.br continuation)
-            | none => pure builder
-          builder.selectBlock continuation
+          if thenOpen.isNone && builder.current.isNone then pure builder
+          else
+            let (continuation, builder) := builder.newBlock
+            let builder ← builder.terminate (.br continuation)
+            let builder ← match thenOpen with
+              | some block => do
+                let builder ← builder.selectBlock block
+                builder.terminate (.br continuation)
+              | none => pure builder
+            builder.selectBlock continuation
+      return (scope, builder)
     | .forLoop initializer condition post body => do
       let loopScope := scope.enter
       let (loopScope, builder) ← match initializer with
-        | some (.varDeclaration name typeName value) =>
-          lowerDeclaration all loopScope builder name typeName value
-        | some statement => do
-          let builder ← lowerStatement all signature loopScope builder statement
-          pure (loopScope, builder)
+        | some statement => lowerStatement all signature loopScope builder statement
         | none => pure (loopScope, builder)
 
       if builder.current.isNone then
@@ -320,8 +222,10 @@ mutual
         let builder ← lowerStatements all signature loopScope.enter builder body
         let (_, builder) ← builder.popLoop
         match post with
-        | some statement => return ← lowerStatement all signature loopScope builder statement
-        | none => return builder
+        | some statement =>
+          let (_, builder) ← lowerStatement all signature loopScope builder statement
+          return (scope, builder)
+        | none => return (scope, builder)
 
       let (header, builder) := builder.newBlock
       let (loopBody, builder) := builder.newBlock
@@ -344,14 +248,17 @@ mutual
       let builder ← match post, context.continueTarget with
         | some statement, some postBlock => do
           let builder ← builder.selectBlock postBlock
-          let builder ← lowerStatement all signature loopScope builder statement
+          let (_, builder) ← lowerStatement all signature loopScope builder statement
           builder.terminate (.br header)
-        | some statement, none => lowerStatement all signature loopScope builder statement
+        | some statement, none => do
+          let (_, builder) ← lowerStatement all signature loopScope builder statement
+          pure builder
         | none, _ => pure builder
 
-      match context.breakTarget with
-      | some exit => builder.selectBlock exit
-      | none => return builder
+      let builder ← match context.breakTarget with
+        | some exit => builder.selectBlock exit
+        | none => pure builder
+      return (scope, builder)
 
   /--
   Lowers a statement sequence, making each declaration visible to subsequent statements.
@@ -359,13 +266,11 @@ mutual
   -/
   private partial def lowerStatements (all : Std.HashMap String Signature) (signature : Signature)
       (scope : Scope) (builder : Builder) (statements : Array Syntax.Stmt) : Except Diagnostic Builder := do
-    let mut state := (scope, builder)
+    let mut scope := scope
+    let mut builder := builder
     for statement in statements do
-      match statement with
-      | .varDeclaration name typeName initializer =>
-        state ← lowerDeclaration all state.1 state.2 name typeName initializer
-      | _ => state := (state.1, ← lowerStatement all signature state.1 state.2 statement)
-    return state.2
+      (scope, builder) ← lowerStatement all signature scope builder statement
+    return builder
 end
 
 private partial def hasOwnBreak (statements : Array Syntax.Stmt) : Bool :=
