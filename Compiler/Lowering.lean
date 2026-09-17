@@ -51,62 +51,98 @@ private def decodeString (literal : String) (span : Span) : Except Diagnostic By
   if literal.startsWith "\"" then return Literal.decodeInterpreted literal
   else throw (diagnosticAt span "raw string literals are not supported yet")
 
--- A local shadows every function of the same name, including println, as in Go.
-private def checkCallable (scope : Scope) (name : String) (span : Span) : Except Diagnostic Unit := do
-  if (scope.find? name).isSome then
-    throw (diagnosticAt span s!"cannot call non-function '{name}'")
+private structure Context where
+  all : Std.HashMap String Signature
+  signature : Signature
+  scope : Scope
+
+private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
+
+-- Pass the builder directly to its operation so `get` cannot retain an alias to its arrays.
+@[inline] private def runBuilder (operation : Builder → Except Diagnostic (α × Builder)) : LowerM α :=
+  fun _ builder => operation builder
+
+@[inline] private def updateBuilder (operation : Builder → Except Diagnostic Builder) : LowerM Unit :=
+  runBuilder fun builder => (operation builder).map ((), ·)
+
+@[inline] private def updateContext (operation : Builder → Except Diagnostic Builder) : LowerM Context :=
+  fun context builder => (operation builder).map (context, ·)
+
+@[inline] private def emit (instruction : IR.Instruction) : LowerM Unit :=
+  updateBuilder (·.emit instruction)
+
+@[inline] private def emitValue (instruction : IR.ValueId → IR.Instruction) : LowerM IR.Operand :=
+  runBuilder (·.emitValue instruction)
+
+@[inline] private def terminate (terminator : IR.Terminator) : LowerM Unit :=
+  updateBuilder (·.terminate terminator)
+
+@[inline] private def selectBlock (target : IR.BlockId) : LowerM Unit :=
+  updateBuilder (·.selectBlock target)
+
+@[inline] private def jump (isBreak : Bool) : LowerM Unit :=
+  updateBuilder (·.jump isBreak)
+
+@[inline] private def newBlock : LowerM IR.BlockId :=
+  fun _ builder => pure builder.newBlock
+
+@[inline] private def suspend : LowerM (Option IR.BlockId) :=
+  fun _ builder => pure builder.suspend
+
+@[inline] private def popLoop : LowerM LoopContext :=
+  runBuilder (·.popLoop)
+
+@[inline] private def withScope (scope : Scope) (action : LowerM α) : LowerM α :=
+  withReader (fun context => { context with scope }) action
 
 private structure LoweredOperand where
   operand : IR.Operand
   kind : IR.ValueKind
-  builder : Builder
 
-private partial def lowerOperand (all : Std.HashMap String Signature) (scope : Scope)
-    (builder : Builder) : Syntax.Expr → Except Diagnostic LoweredOperand
+private partial def lowerOperand : Syntax.Expr → LowerM LoweredOperand
   | .intLiteral text span => do
     let value := Literal.decodeInt text
     if value > IR.maxSignedInt64 then
       throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
-    return ⟨.literal value, .int, builder⟩
+    return ⟨.literal value, .int⟩
   | .identifier name => do
-    let some symbol := scope.find? name.text.copy
+    let some symbol := (← read).scope.find? name.text.copy
       | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-    let (value, builder) ← builder.emitValue (.load · symbol.slot symbol.valueKind)
-    return ⟨value, symbol.valueKind, builder⟩
+    let value ← emitValue (.load · symbol.slot symbol.valueKind)
+    return ⟨value, symbol.valueKind⟩
   | .call callee arguments span => do
     let name := callee.text.copy
-    checkCallable scope name callee.span
-    let some signature := all[name]?
+    -- A local shadows every function of the same name, including println, as in Go.
+    if ((← read).scope.find? name).isSome then
+      throw (diagnosticAt callee.span s!"cannot call non-function '{name}'")
+    let some signature := (← read).all[name]?
       | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
     unless signature.returnsInt do
       throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
     if arguments.size != signature.parameters.size then
       throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
     let mut lowered := #[]
-    let mut builder := builder
     for argument in arguments do
-      let ⟨value, kind, next⟩ ← lowerOperand all scope builder argument
+      let ⟨value, kind⟩ ← lowerOperand argument
       unless kind == .int do throw (diagnosticAt argument.span "function arguments must be int")
       lowered := lowered.push value
-      builder := next
-    let (value, next) ← builder.emitValue (.call · signature.name lowered)
-    return ⟨value, .int, next⟩
+    let value ← emitValue (.call · signature.name lowered)
+    return ⟨value, .int⟩
   | .binary op left right span => do
-    let ⟨left, leftKind, builder⟩ ← lowerOperand all scope builder left
-    let ⟨right, rightKind, builder⟩ ← lowerOperand all scope builder right
+    let ⟨left, leftKind⟩ ← lowerOperand left
+    let ⟨right, rightKind⟩ ← lowerOperand right
     unless leftKind == .int && rightKind == .int do
       throw (diagnosticAt span "binary operands must be int")
     let (op, kind) : IR.Op × IR.ValueKind := match op with
       | .add => (.add, .int)
       | .subtract => (.subtract, .int)
       | .less => (.less, .bool)
-    let (value, builder) ← builder.emitValue (.binary · op left right)
-    return ⟨value, kind, builder⟩
+    let value ← emitValue (.binary · op left right)
+    return ⟨value, kind⟩
   | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
 
-private def lowerDeclaration (all : Std.HashMap String Signature) (scope : Scope)
-    (builder : Builder) (name : Syntax.Ident) (typeName : Option Syntax.Ident)
-    (initializer : Option Syntax.Expr) : Except Diagnostic (Scope × Builder) := do
+private def lowerDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ident)
+    (initializer : Option Syntax.Expr) : LowerM Context := do
   if typeName.isNone && initializer.isNone then
     throw (diagnosticAt name.span "variable declaration requires a type or initializer")
   let nameText := name.text.copy
@@ -116,161 +152,155 @@ private def lowerDeclaration (all : Std.HashMap String Signature) (scope : Scope
     unless typeName.text == "int" do
       throw (diagnosticAt typeName.span "only int variable types are supported")
   -- Resolve the initializer before introducing the binding.
-  let ⟨operand, kind, next⟩ ← match initializer with
-    | some value => lowerOperand all scope builder value
-    | none => pure ⟨.literal 0, .int, builder⟩
+  let ⟨operand, kind⟩ ← match initializer with
+    | some value => lowerOperand value
+    | none => pure ⟨.literal 0, .int⟩
   if typeName.isSome && kind != .int then
     throw (diagnosticAt ((initializer.map (·.span)).getD name.span) "initializer must be int")
-  let slot := next.slots.size
-  let scope ← scope.declare nameText ⟨.local, slot, kind, name.span⟩
+  let slot ← modifyGet fun builder => (builder.slots.size, builder)
+  let context ← read
+  let scope ← context.scope.declare nameText ⟨.local, slot, kind, name.span⟩
   -- Reserve slots even on closed paths; stores depend on reachability.
-  let builder := { next with slots := next.slots.push kind }
-  return (scope, ← builder.emit (.store slot kind operand))
+  modify fun builder => { builder with slots := builder.slots.push kind }
+  emit (.store slot kind operand)
+  return { context with scope }
 
-private def lowerCondition (all : Std.HashMap String Signature) (scope : Scope)
-    (builder : Builder) (condition : Syntax.Expr) (message : String) :
-    Except Diagnostic LoweredOperand := do
-  let lowered ← lowerOperand all scope builder condition
+private def lowerCondition (condition : Syntax.Expr) (message : String) : LowerM IR.Operand := do
+  let lowered ← lowerOperand condition
   unless lowered.kind == .bool do throw (diagnosticAt condition.span message)
-  return lowered
+  return lowered.operand
 
 mutual
-  private partial def lowerStatement (all : Std.HashMap String Signature) (signature : Signature)
-      (scope : Scope) (builder : Builder) : Syntax.Stmt → Except Diagnostic (Scope × Builder)
+  private partial def lowerStatement : Syntax.Stmt → LowerM Context
     | .expr (.call callee arguments span) => do
       let name := callee.text.copy
-      checkCallable scope name callee.span
+      if ((← read).scope.find? name).isSome then
+        throw (diagnosticAt callee.span s!"cannot call non-function '{name}'")
       if name != "println" then
         throw (diagnosticAt callee.span "only println calls may be used as statements")
       let some argument := arguments[0]?
         | throw (diagnosticAt span "println expects one argument")
       if arguments.size != 1 then throw (diagnosticAt span "println expects one argument")
-      let (instruction, builder) ← match argument with
+      match argument with
         | .stringLiteral literal span =>
-          pure (IR.Instruction.printString (← decodeString literal span), builder)
+          updateContext (·.emit (.printString (← decodeString literal span)))
         | _ => do
-          let ⟨value, kind, builder⟩ ← lowerOperand all scope builder argument
+          let ⟨value, kind⟩ ← lowerOperand argument
           unless kind == .int do throw (diagnosticAt argument.span "println supports only string and int")
-          pure (.printInt value, builder)
-      return (scope, ← builder.emit instruction)
+          updateContext (·.emit (.printInt value))
     | .varDeclaration name typeName initializer =>
-      lowerDeclaration all scope builder name typeName initializer
+      lowerDeclaration name typeName initializer
     | .assignment name value => do
-      let some symbol := scope.find? name.text.copy
+      let some symbol := (← read).scope.find? name.text.copy
         | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-      let ⟨operand, kind, builder⟩ ← lowerOperand all scope builder value
+      let ⟨operand, kind⟩ ← lowerOperand value
       unless kind == symbol.valueKind do
         throw (diagnosticAt value.span "assignment type does not match variable type")
-      return (scope, ← builder.emit (.store symbol.slot kind operand))
+      updateContext (·.emit (.store symbol.slot kind operand))
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
+      let signature := (← read).signature
       unless signature.returnsInt do throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      let ⟨operand, kind, builder⟩ ← lowerOperand all scope builder value
+      let ⟨operand, kind⟩ ← lowerOperand value
       unless kind == .int do throw (diagnosticAt value.span "return value must be int")
-      return (scope, ← builder.terminate (.ret (some operand)))
+      updateContext (·.terminate (.ret (some operand)))
     | .break span => do
-      if builder.loops.isEmpty then throw (diagnosticAt span "break outside loop")
-      return (scope, ← builder.jump (isBreak := true))
+      if (← get).loops.isEmpty then throw (diagnosticAt span "break outside loop")
+      updateContext (·.jump (isBreak := true))
     | .continue span => do
-      if builder.loops.isEmpty then throw (diagnosticAt span "continue outside loop")
-      return (scope, ← builder.jump (isBreak := false))
+      if (← get).loops.isEmpty then throw (diagnosticAt span "continue outside loop")
+      updateContext (·.jump (isBreak := false))
     | .ifThen condition body elseBody => do
-      let ⟨operand, _, builder⟩ ← lowerCondition all scope builder condition "if condition must be bool"
+      let context ← read
+      let scope := context.scope
+      let operand ← lowerCondition condition "if condition must be bool"
       -- Closed paths still check source semantics, without reserving unreachable blocks.
-      if builder.current.isNone then
-        let builder ← lowerStatements all signature scope.enter builder body
-        match elseBody with
-        | some statements => return (scope, ← lowerStatements all signature scope.enter builder statements)
-        | none => return (scope, builder)
-      let (thenBlock, builder) := builder.newBlock
-      let (elseBlock, builder) := builder.newBlock
-      let builder ← builder.terminate (.condBr operand thenBlock elseBlock)
-      let builder ← builder.selectBlock thenBlock
-      let builder ← lowerStatements all signature scope.enter builder body
-      let builder ← match elseBody with
-      | none => do
-        let builder ← builder.terminate (.br elseBlock)
-        builder.selectBlock elseBlock
-      | some statements => do
-          let (thenOpen, builder) := builder.suspend
-          let builder ← builder.selectBlock elseBlock
-          let builder ← lowerStatements all signature scope.enter builder statements
-          if thenOpen.isNone && builder.current.isNone then pure builder
-          else
-            let (continuation, builder) := builder.newBlock
-            let builder ← builder.terminate (.br continuation)
-            let builder ← match thenOpen with
-              | some block => do
-                let builder ← builder.selectBlock block
-                builder.terminate (.br continuation)
-              | none => pure builder
-            builder.selectBlock continuation
-      return (scope, builder)
+      if (← get).current.isNone then
+        withScope scope.enter (lowerStatements body)
+        if let some statements := elseBody then
+          withScope scope.enter (lowerStatements statements)
+        return context
+      let thenBlock ← newBlock
+      let elseBlock ← newBlock
+      terminate (.condBr operand thenBlock elseBlock)
+      selectBlock thenBlock
+      withScope scope.enter (lowerStatements body)
+      match elseBody with
+      | none =>
+        terminate (.br elseBlock)
+        selectBlock elseBlock
+      | some statements =>
+        let thenOpen ← suspend
+        selectBlock elseBlock
+        withScope scope.enter (lowerStatements statements)
+        if thenOpen.isNone && (← get).current.isNone then return context
+        let continuation ← newBlock
+        terminate (.br continuation)
+        if let some block := thenOpen then
+          selectBlock block
+          terminate (.br continuation)
+        selectBlock continuation
+      return context
     | .forLoop initializer condition post body => do
+      let context ← read
+      let scope := context.scope
       let loopScope := scope.enter
-      let (loopScope, builder) ← match initializer with
-        | some statement => lowerStatement all signature loopScope builder statement
-        | none => pure (loopScope, builder)
+      let loopContext ← match initializer with
+        | some statement => withScope loopScope (lowerStatement statement)
+        | none => pure { context with scope := loopScope }
+      let loopScope := loopContext.scope
 
-      if builder.current.isNone then
-        let builder ← match condition with
-          | some condition => do
-            let ⟨_, _, builder⟩ ← lowerCondition all loopScope builder condition "for condition must be bool"
-            pure builder
-          | none => pure builder
-        let builder := { builder with loops := ⟨none, none⟩ :: builder.loops }
-        let builder ← lowerStatements all signature loopScope.enter builder body
-        let (_, builder) ← builder.popLoop
-        match post with
-        | some statement =>
-          let (_, builder) ← lowerStatement all signature loopScope builder statement
-          return (scope, builder)
-        | none => return (scope, builder)
+      if (← get).current.isNone then
+        if let some condition := condition then
+          let _ ← withScope loopScope (lowerCondition condition "for condition must be bool")
+        modify fun builder => { builder with loops := ⟨none, none⟩ :: builder.loops }
+        withScope loopScope.enter (lowerStatements body)
+        let _ ← popLoop
+        if let some statement := post then
+          let _ ← withScope loopScope (lowerStatement statement)
+        return context
 
-      let (header, builder) := builder.newBlock
-      let (loopBody, builder) := builder.newBlock
-      let builder ← builder.terminate (.br header)
-      let builder ← builder.selectBlock header
-      let (exit, builder) ← match condition with
+      let header ← newBlock
+      let loopBody ← newBlock
+      terminate (.br header)
+      selectBlock header
+      let exit ← match condition with
         | some condition => do
-          let ⟨operand, _, builder⟩ ← lowerCondition all loopScope builder condition "for condition must be bool"
-          let (exit, builder) := builder.newBlock
-          pure (some exit, ← builder.terminate (.condBr operand loopBody exit))
-        | none => pure (none, ← builder.terminate (.br loopBody))
+          let operand ← withScope loopScope (lowerCondition condition "for condition must be bool")
+          let exit ← newBlock
+          terminate (.condBr operand loopBody exit)
+          pure (some exit)
+        | none =>
+          terminate (.br loopBody)
+          pure none
 
-      let builder ← builder.selectBlock loopBody
+      selectBlock loopBody
       let continueTarget := if post.isSome then none else some header
-      let builder := { builder with loops := ⟨exit, continueTarget⟩ :: builder.loops }
-      let builder ← lowerStatements all signature loopScope.enter builder body
-      let builder ← builder.jump (isBreak := false)
-      let (context, builder) ← builder.popLoop
+      modify fun builder => { builder with loops := ⟨exit, continueTarget⟩ :: builder.loops }
+      withScope loopScope.enter (lowerStatements body)
+      jump (isBreak := false)
+      let loopControl ← popLoop
 
-      let builder ← match post, context.continueTarget with
-        | some statement, some postBlock => do
-          let builder ← builder.selectBlock postBlock
-          let (_, builder) ← lowerStatement all signature loopScope builder statement
-          builder.terminate (.br header)
-        | some statement, none => do
-          let (_, builder) ← lowerStatement all signature loopScope builder statement
-          pure builder
-        | none, _ => pure builder
+      if let some statement := post then
+        if let some postBlock := loopControl.continueTarget then
+          selectBlock postBlock
+          let _ ← withScope loopScope (lowerStatement statement)
+          terminate (.br header)
+        else
+          let _ ← withScope loopScope (lowerStatement statement)
 
-      let builder ← match context.breakTarget with
-        | some exit => builder.selectBlock exit
-        | none => pure builder
-      return (scope, builder)
+      if let some exit := loopControl.breakTarget then selectBlock exit
+      return context
 
   /--
   Lowers a statement sequence, making each declaration visible to subsequent statements.
   Scope changes remain within this sequence, while stores can update enclosing bindings.
   -/
-  private partial def lowerStatements (all : Std.HashMap String Signature) (signature : Signature)
-      (scope : Scope) (builder : Builder) (statements : Array Syntax.Stmt) : Except Diagnostic Builder := do
-    let mut scope := scope
-    let mut builder := builder
+  private partial def lowerStatements (statements : Array Syntax.Stmt) : LowerM Unit := do
+    let mut context ← read
     for statement in statements do
-      (scope, builder) ← lowerStatement all signature scope builder statement
-    return builder
+      -- Only declarations replace the context; other statements reuse it.
+      context ← withReader (fun _ => context) (lowerStatement statement)
 end
 
 private partial def hasOwnBreak (statements : Array Syntax.Stmt) : Bool :=
@@ -308,7 +338,7 @@ def lower (file : Syntax.File) : Except Diagnostic IR.Program := do
     let mut initial : Builder := { slots := Array.replicate signature.parameters.size .int }
     for index in [:signature.parameters.size] do
       initial ← initial.emit (.store index .int (.argument index))
-    let builder ← lowerStatements all signature signature.scope initial function.body
+    let (_, builder) ← ((lowerStatements function.body).run ⟨all, signature, signature.scope⟩).run initial
     if signature.returnsInt then
       unless isTerminating function.body do
         throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
