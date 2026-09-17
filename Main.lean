@@ -2,7 +2,7 @@ import GoAot
 
 open GoAot
 
-private def compileFile (input output backend : String) : IO Unit := do
+private def compileFile (input output backend : String) (emit : Bool) : IO Unit := do
   let source := Source.ofString (← IO.FS.readFile input)
   let (generated, compiler, language, options) ← match backend with
     | "c" => match compileToC source with
@@ -14,6 +14,11 @@ private def compileFile (input output backend : String) : IO Unit := do
           "ir", #["-O2", "-Wno-override-module"])
       | .error diagnostic => throw (IO.userError (diagnostic.render source))
     | _ => throw (IO.userError s!"unknown backend '{backend}'")
+
+  if emit then
+    IO.FS.writeFile output generated
+    return
+
   IO.FS.withTempFile fun handle path => do
     handle.putStr generated
     handle.flush
@@ -28,13 +33,12 @@ private def usage : IO.Error :=
 private structure Options where
   input : Option String := none
   output : String := "a.out"
-  -- Keep C as the default until LLVM correctness and benchmark gates are complete.
-  backend : String := "c"
+  backend : Option String := none
 
 private def parseArgs : List String → Options → Except IO.Error Options
   | [], options => pure options
   | "-o" :: output :: rest, options => parseArgs rest { options with output }
-  | "--backend" :: backend :: rest, options => parseArgs rest { options with backend }
+  | "--backend" :: backend :: rest, options => parseArgs rest { options with backend := some backend }
   | argument :: rest, options =>
     if argument.startsWith "-" || options.input.isSome then throw usage
     else parseArgs rest { options with input := some argument }
@@ -42,4 +46,18 @@ private def parseArgs : List String → Options → Except IO.Error Options
 def main (args : List String) : IO Unit := do
   let options ← IO.ofExcept (parseArgs args {})
   let some input := options.input | throw usage
-  compileFile input options.output options.backend
+
+  let emitted := match (options.output : System.FilePath).extension with
+    | some "ll" => some "llvm"
+    | some "c" => some "c"
+    | _ => none
+
+  let backend ← match emitted, options.backend with
+    | some inferred, some chosen =>
+      if inferred == chosen then pure inferred
+      else throw (IO.userError s!"output '{options.output}' requires backend '{inferred}'")
+    | some inferred, none => pure inferred
+    -- Keep C as the default until LLVM correctness and benchmark gates are complete.
+    | none, chosen => pure (chosen.getD "c")
+
+  compileFile input options.output backend emitted.isSome

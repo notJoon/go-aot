@@ -118,6 +118,12 @@ private def checkDifferential (name : String) : IO Unit := do
   check (cOutput.stdout == llvmOutput.stdout) s!"backend stdout differs: {name}"
   check (llvmOutput.exitCode == 0 && llvmOutput.stdout == expected) s!"wrong output: {name}"
 
+private def checkDeadControlFlow (name : String) : IO Unit := do
+  let source := Source.ofString (← IO.FS.readFile ("Tests/Golden/" ++ name ++ ".go"))
+  for compile in [compileToC, compileToLLVM] do
+    let .ok generated := compile source | throw (IO.userError s!"{name} failed to compile")
+    check (!generated.contains "dead marker") s!"unreachable code was emitted: {name}"
+
 -- Byte comparison makes embedded NUL truncation observable.
 private def checkNulString : IO Unit := do
   let input ← IO.FS.readFile "Tests/Golden/nul.go"
@@ -164,31 +170,21 @@ private def checkDirectCFG : IO Unit := do
     "empty main did not return successfully"
 
 def goldenMain : IO Unit := do
-  checkGolden "minimal"
-  checkGolden "invalid"
-  checkCompileGolden "locals"
-  checkLLVM "locals" true
-  checkDifferential "locals"
-  checkCompileGolden "hello"
-  checkCompileGolden "fib"
-  checkCompileGolden "tail_add"
-  checkCompileGolden "collision"
-  checkLLVM "hello" true
-  checkLLVM "generic_if" true
-  checkLLVM "tail_add" true
-  checkLLVM "fib" true
-  checkLLVM "semantics"
-  checkLLVM "strings"
-  -- C signed overflow is undefined so LLVM uses an independent expected result.
-  checkLLVM "overflow"
-  checkDifferential "hello"
-  checkDifferential "fib"
-  checkDifferential "tail_add"
-  checkDifferential "generic_if"
-  checkDifferential "semantics"
-  checkDifferential "strings"
-  checkDifferential "cfg"
-  checkDifferential "collision"
+  let entries ← ("Tests/Golden" : System.FilePath).readDir
+  for file in (entries.map (·.fileName)).qsort (· < ·) do
+    if file.endsWith ".c.golden" then
+      checkCompileGolden (file.dropSuffix ".c.golden").copy
+    else if file.endsWith ".ll.golden" then
+      checkLLVM (file.dropSuffix ".ll.golden").copy true
+    else if file.endsWith ".out.golden" then
+      let name := (file.dropSuffix ".out.golden").copy
+      -- C signed overflow is undefined, so this fixture uses the LLVM oracle only.
+      if name == "overflow" then checkLLVM name else checkDifferential name
+    else if file.endsWith ".golden" then
+      checkGolden (file.dropSuffix ".golden").copy
+  checkDeadControlFlow "for_dead_control"
+  checkDeadControlFlow "for_dead_after_loop"
+  checkDeadControlFlow "for_dead_post"
   checkDirectCFG
   checkNulString
   checkInvalidSSARejected

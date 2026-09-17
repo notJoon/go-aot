@@ -108,3 +108,54 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "expected semicolon"⟩
   failsWith (parse source) expected && failsWith (compileToC source) expected &&
     failsWith (compileToLLVM source) expected
+
+#guard [
+    ("break", "break outside loop"),
+    ("continue", "continue outside loop")].all fun (keyword, message) =>
+  let before := "package main\nfunc main() { "
+  let source := Source.ofString (before ++ keyword ++ " }")
+  let expected : Diagnostic := ⟨.lowering,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + keyword.utf8ByteSize⟩, message⟩
+  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
+#guard
+  let before := "package main\nfunc main() { for "
+  let source := Source.ofString (before ++ "1 { println(2) } }")
+  let expected : Diagnostic := ⟨.lowering,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "for condition must be bool"⟩
+  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
+#guard ["break", "continue"].all fun keyword =>
+  let before := "package main\nfunc main() { for { " ++ keyword ++ " "
+  let source := Source.ofString (before ++ "L } }")
+  let expected : Diagnostic := ⟨.parser,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩,
+    s!"labeled {keyword} is unsupported"⟩
+  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
+#guard
+  let before := "package main\n"
+  let function := "func f() int { for { return 1; break } }"
+  let source := Source.ofString (before ++ function ++ "\nfunc main() {}")
+  let expected : Diagnostic := ⟨.lowering,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + function.utf8ByteSize⟩,
+    "function 'f' must end with return"⟩
+
+  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
+#guard
+  let before := "package main\nfunc main() { for i := 0; i < 1; i = i + 1 {}; println("
+  let source := Source.ofString (before ++ "i) }")
+  let expected : Diagnostic := ⟨.lowering,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "unknown identifier 'i'"⟩
+  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
+#guard [
+    ("for { break; var x int; ", "x", " := 1 }", "duplicate declaration 'x'"),
+    ("for { continue; var x int; println(", "missing", ") }", "unknown identifier 'missing'")].all
+  fun (beforeLoop, token, afterToken, message) =>
+    let before := "package main\nfunc main() { " ++ beforeLoop
+    let source := Source.ofString (before ++ token ++ afterToken ++ " }")
+    let expected : Diagnostic := ⟨.lowering,
+      some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
+    failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected

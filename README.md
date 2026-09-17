@@ -33,41 +33,26 @@ The LLVM backend emits target independent LLVM IR and asks Clang to optimize,
 generate host machine code, and link it. After the correctness and benchmark gates
 are complete, LLVM becomes the only backend and the C backend is removed.
 
-	lake exe goaot input.go -o program --backend llvm
-	lake exe goaot input.go -o program --backend c
+The LLVM backend invokes `clang -O2 -x ir`; generated IR contains no hard-coded target
+triple or data layout. The temporary C backend uses the system `cc`.
 
-The LLVM backend supports signed 64-bit integers and any number of integer function
-arguments. It invokes `clang -O2 -x ir`; generated IR contains no hard-coded target
-triple or data layout. The temporary C backend uses the system `cc`. Tests honor
-`CC` and `CLANG` to select the host compilers.
+## How to Run
 
-## MVP
-
-The MVP follows the ADR vertically as
-`Driver → Syntax/Parser → Binding+Type+Lowering → IR → C/LLVM IR → host compiler`.
-It currently supports `int` functions, parameters, returns, `if`, recursive calls,
-`+`, `-`, `<`, and `println` for strings and integers. Local variables support
-`var x int`, `var x int = expr`, `x := expr`, and `x = expr`.
-
-Identifiers resolve through nested scopes (`Compiler/Scope.lean`): parameters
-live in the function body's scope, and each `if` body gets a child scope.
-Declarations can shadow names from an outer scope. A declaration without an
-initializer starts at zero. Short declarations infer `int` or `bool` from their
-initializer. Explicit variable types currently support only `int`.
-Declarations and assignments accept one name at a time. Inferred `var x = expr`,
-grouped `var` declarations, compound assignments such as `x += 1`, increment and
-decrement statements (`x++`, `x--`), and the blank identifier `_` in local
-declarations and assignments are unsupported. Unused local variables are accepted
-without a diagnostic, unlike the Go compiler.
-
-Locals and parameters use typed stack slots allocated in the entry block. Reads
-and assignments lower to load and store instructions, so values persist across
-branches. LLVM can promote these slots during optimization.
-
-`int` is a signed 64-bit value with wrapping add/subtract. Function arguments and
-binary operands are evaluated left to right. Loops, `else`, raw
-strings, and other Go constructs are rejected. The temporary C backend is not the
-oracle for overflow because signed overflow is undefined in C.
+Compile a Go file and run the program:
 
 	lake exe goaot Tests/Golden/hello.go -o hello
 	./hello
+
+Select a backend with `--backend`:
+
+	lake exe goaot input.go -o program --backend llvm
+	lake exe goaot input.go -o program --backend c
+
+An output ending in `.ll` or `.c` saves the generated LLVM IR or C code instead of building a program:
+
+	lake exe goaot input.go -o program.ll
+	lake exe goaot input.go -o program.c
+
+Run the tests. `CC` and `CLANG` select the host compilers:
+
+	lake test

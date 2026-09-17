@@ -40,7 +40,11 @@ inductive Stmt where
   | assignment (name : Ident) (value : Expr)
   | expr (value : Expr)
   | return (value : Expr)
-  | ifThen (condition : Expr) (body : Array Stmt)
+  | ifThen (condition : Expr) (body : Array Stmt) (elseBody : Option (Array Stmt))
+  | forLoop (initializer : Option Stmt) (condition : Option Expr) (post : Option Stmt)
+      (body : Array Stmt)
+  | break (span : Span)
+  | continue (span : Span)
   deriving Repr, BEq
 
 structure Parameter where

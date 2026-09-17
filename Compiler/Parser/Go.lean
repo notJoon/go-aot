@@ -76,6 +76,16 @@ private def peekSymbol (text : String) : P Bool := do
   | some { kind := .symbol actual, .. } => return actual == text
   | _ => return false
 
+private def peekKeyword (text : String) : P Bool := do
+  match ← Parser.peek? with
+  | some { kind := .keyword actual, .. } => return actual == text
+  | _ => return false
+
+private def peekSemicolon : P Bool := do
+  match ← Parser.peek? with
+  | some { kind := .semicolon, .. } => return true
+  | _ => return false
+
 private def statementEnd : P Unit := do
   if ← peekSymbol "}" then return ()
   let _ ← semicolon
@@ -84,6 +94,10 @@ private def statementEnd : P Unit := do
 private def rejectMultiple : P Unit := do
   if ← peekSymbol "," then
     Parser.fail "multiple variable declarations and assignments are unsupported"
+
+private def rejectLabel (keyword : String) : P Unit := do
+  if let some { kind := .identifier, .. } ← Parser.peek? then
+    Parser.fail s!"labeled {keyword} is unsupported"
 
 mutual
   private partial def expression (source : Source) : P Syntax.Expr :=
@@ -139,43 +153,61 @@ mutual
     match ← Parser.peek? with
     | some { kind := .keyword "return", .. } => returnStatement source
     | some { kind := .keyword "if", .. } => ifStatement source
-    | some { kind := .keyword "var", .. } =>
-      let _ ← keyword "var"
-      let name ← identifier source
-      if ← peekSymbol "=" then
-        Parser.fail "var declarations without an explicit type are unsupported"
-      rejectMultiple
-      let typeName ← Parser.label (identifier source) "expected variable type"
-      let initializer ← if ← peekSymbol "=" then
-          let _ ← symbol "="
-          pure (some (← expression source))
-        else pure none
-      rejectMultiple
+    | some { kind := .keyword "for", .. } => forStatement source
+    | some { kind := .keyword "break", .. } =>
+      let token ← keyword "break"
+      rejectLabel "break"
       statementEnd
-      return .varDeclaration name (some typeName) initializer
-    | _ =>
-      let start ← fun it => .ok it it
-      let value ← expression source
-      if let .identifier _ := value then rejectMultiple
-      match ← Parser.peek? with
-      | some { kind := .symbol op, .. } =>
-        if op == "++" || op == "--" then
-          Parser.fail "increment and decrement statements are unsupported"
-        if ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "&^="].contains op then
-          Parser.fail "compound assignments are unsupported"
-      | _ => pure ()
-      if (← peekSymbol ":=") || (← peekSymbol "=") then
-        let .identifier name := value
-          | fun _ => .err start (.other "assignment target must be an identifier")
-        let short ← peekSymbol ":="
-        let _ ← symbol (if short then ":=" else "=")
-        let initializer ← expression source
-        rejectMultiple
-        statementEnd
-        return if short then .varDeclaration name none (some initializer)
-          else .assignment name initializer
+      return .break token.span
+    | some { kind := .keyword "continue", .. } =>
+      let token ← keyword "continue"
+      rejectLabel "continue"
       statementEnd
-      return .expr value
+      return .continue token.span
+    | some { kind := .keyword "var", .. } => do
+      let result ← variableDeclaration source
+      statementEnd
+      return result
+    | _ => do
+      let result ← simpleStatement source
+      statementEnd
+      return result
+
+  private partial def variableDeclaration (source : Source) : P Syntax.Stmt := do
+    let _ ← keyword "var"
+    let name ← identifier source
+    if ← peekSymbol "=" then
+      Parser.fail "var declarations without an explicit type are unsupported"
+    rejectMultiple
+    let typeName ← Parser.label (identifier source) "expected variable type"
+    let initializer ← if ← peekSymbol "=" then
+        let _ ← symbol "="
+        pure (some (← expression source))
+      else pure none
+    rejectMultiple
+    return .varDeclaration name (some typeName) initializer
+
+  private partial def simpleStatement (source : Source) : P Syntax.Stmt := do
+    let start ← fun it => .ok it it
+    let value ← expression source
+    if let .identifier _ := value then rejectMultiple
+    match ← Parser.peek? with
+    | some { kind := .symbol op, .. } =>
+      if op == "++" || op == "--" then
+        Parser.fail "increment and decrement statements are unsupported"
+      if ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "&^="].contains op then
+        Parser.fail "compound assignments are unsupported"
+    | _ => pure ()
+    if (← peekSymbol ":=") || (← peekSymbol "=") then
+      let .identifier name := value
+        | fun _ => .err start (.other "assignment target must be an identifier")
+      let short ← peekSymbol ":="
+      let _ ← symbol (if short then ":=" else "=")
+      let initializer ← expression source
+      rejectMultiple
+      return if short then .varDeclaration name none (some initializer)
+        else .assignment name initializer
+    return .expr value
 
   private partial def returnStatement (source : Source) : P Syntax.Stmt := do
     let _ ← keyword "return"
@@ -184,11 +216,45 @@ mutual
     return .return value
 
   private partial def ifStatement (source : Source) : P Syntax.Stmt := do
+    let result ← ifClause source
+    statementEnd
+    return result
+
+  private partial def ifClause (source : Source) : P Syntax.Stmt := do
     let _ ← keyword "if"
     let condition ← expression source
     let (body, _) ← block source
+    let elseBody ← if ← peekKeyword "else" then
+        let _ ← keyword "else"
+        if ← peekKeyword "if" then pure (some #[← ifClause source])
+        else pure (some (← block source).1)
+      else pure none
+    return .ifThen condition body elseBody
+
+  private partial def forStatement (source : Source) : P Syntax.Stmt := do
+    let _ ← keyword "for"
+    let (initializer, condition, post) ←
+      if ← peekSymbol "{" then pure (none, none, none)
+      else if ← peekSemicolon then forClause source none
+      else do
+        let first ← simpleStatement source
+        if ← peekSemicolon then forClause source (some first)
+        else match first with
+          | .expr condition => pure (none, some condition, none)
+          | _ => Parser.fail "expected for condition or semicolon"
+    let (body, _) ← block source
     statementEnd
-    return .ifThen condition body
+    return .forLoop initializer condition post body
+
+  private partial def forClause (source : Source) (initializer : Option Syntax.Stmt) :
+      P (Option Syntax.Stmt × Option Syntax.Expr × Option Syntax.Stmt) := do
+    let _ ← semicolon
+    let condition ← if ← peekSemicolon then pure none else some <$> expression source
+    let _ ← semicolon
+    let post ← if ← peekSymbol "{" then pure none else some <$> simpleStatement source
+    if let some (.varDeclaration ..) := post then
+      Parser.fail "for post statement cannot declare a variable"
+    return (initializer, condition, post)
 
   private partial def block (source : Source) : P (Array Syntax.Stmt × Token) := do
     let _ ← symbol "{"
