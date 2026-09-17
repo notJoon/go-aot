@@ -3,6 +3,7 @@ import Compiler.Check
 import Compiler.Backend.C
 import Compiler.Backend.LLVM
 import Compiler.IR.Verify
+import Compiler.Lowering.Builder
 
 open GoAot
 
@@ -276,3 +277,48 @@ private def lowered (text : String) : Option IR.Program :=
   return match Check.check file with
     | .error error => error == ⟨.lowering, some name.span, "variable declaration requires a type or initializer"⟩
     | .ok _ => false
+
+private def pending (terminator : Option IR.Terminator) : Lowering.PendingBlock :=
+  { terminator }
+
+private def pendingBuilder (blocks : Array Lowering.PendingBlock)
+    (current : Option IR.BlockId) : Lowering.Builder :=
+  { blocks, current }
+
+-- Only entry-reachable blocks survive, including when dead blocks form a cycle or point back to live blocks.
+#guard match (pendingBuilder #[pending (some (.br 3)), pending (some (.br 2)),
+      pending (some (.condBr (.literal 1) 1 3)), pending (some (.ret none))] none).finish with
+  | .ok blocks => match blocks with
+    | #[⟨#[], .br 1⟩, ⟨#[], .ret none⟩] => true
+    | _ => false
+  | _ => false
+
+#guard match (pendingBuilder #[pending (some (.br 2)), pending none,
+      pending (some (.condBr (.literal 1) 3 4)), pending (some (.ret none)),
+      pending (some (.br 3))] none).finish with
+  | .ok blocks => match blocks with
+    | #[⟨#[], .br 1⟩, ⟨#[], .condBr _ 2 3⟩,
+        ⟨#[], .ret none⟩, ⟨#[], .br 2⟩] => true
+    | _ => false
+  | _ => false
+
+#guard match (pendingBuilder #[pending (some (.ret none)), pending none] (some 1)).finish with
+  | .ok blocks => match blocks with
+    | #[⟨#[], .ret none⟩] => true
+    | _ => false
+  | _ => false
+
+#guard [
+    pendingBuilder #[pending none] (some 0),
+    pendingBuilder #[pending (some (.br 4))] none].all
+  fun builder => !(builder.finish).toBool
+
+-- A branch in dead source cannot make its successor reachable from entry.
+#guard match lowered
+    "package main\nfunc f() int { return 1; println(f()); return 2 }; func main() {}" with
+  | some program => accepted program && match program.functions[0]?.map (·.blocks) with
+    | some blocks => match blocks with
+      | #[⟨#[], .ret (some (.literal 1))⟩] => true
+      | _ => false
+    | none => false
+  | none => false

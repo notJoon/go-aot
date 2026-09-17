@@ -32,6 +32,12 @@ private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
 @[inline] private def terminate (terminator : IR.Terminator) : LowerM Unit :=
   updateBuilder (·.terminate terminator)
 
+@[inline] private def branchIfOpen (target : IR.BlockId) : LowerM Unit :=
+  updateBuilder (·.branchIfOpen target)
+
+@[inline] private def startStatement : LowerM Unit :=
+  updateBuilder (·.startStatement)
+
 @[inline] private def selectBlock (target : IR.BlockId) : LowerM Unit :=
   updateBuilder (·.selectBlock target)
 
@@ -40,12 +46,6 @@ private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
 
 @[inline] private def newBlock : LowerM IR.BlockId :=
   fun _ builder => pure builder.newBlock
-
-@[inline] private def suspend : LowerM (Option IR.BlockId) :=
-  fun _ builder => pure builder.suspend
-
-@[inline] private def popLoop : LowerM LoopContext :=
-  runBuilder (·.popLoop)
 
 private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
   | .intLiteral value => return .literal value
@@ -64,21 +64,19 @@ private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
     emitValue (.binary · op left right)
 
 mutual
-  private partial def lowerStatement : Checked.Stmt → LowerM Unit
-    | .declare id initializer | .assign id initializer => do
+  private partial def lowerStatement (statement : Checked.Stmt) : LowerM Unit := do
+    startStatement
+    match statement with
+    | .declare id initializer | .assign id initializer =>
       let some kind := (← read).function.locals[id]? | throw lowerError
       emit (.store id kind (← lowerExpr initializer))
     | .printString bytes => emit (.printString bytes)
-    | .printInt value => do emit (.printInt (← lowerExpr value))
-    | .return value => do terminate (.ret (some (← lowerExpr value)))
+    | .printInt value => emit (.printInt (← lowerExpr value))
+    | .return value => terminate (.ret (some (← lowerExpr value)))
     | .break => jump (isBreak := true)
     | .continue => jump (isBreak := false)
-    | .ifThen condition body elseBody => do
+    | .ifThen condition body elseBody =>
       let operand ← lowerExpr condition
-      if (← get).current.isNone then
-        lowerStatements body
-        if let some statements := elseBody then lowerStatements statements
-        return
       let thenBlock ← newBlock
       let elseBlock ← newBlock
       terminate (.condBr operand thenBlock elseBlock)
@@ -86,56 +84,36 @@ mutual
       lowerStatements body
       match elseBody with
       | none =>
-        terminate (.br elseBlock)
+        branchIfOpen elseBlock
         selectBlock elseBlock
       | some statements =>
-        let thenOpen ← suspend
+        let continuation ← newBlock
+        branchIfOpen continuation
         selectBlock elseBlock
         lowerStatements statements
-        if thenOpen.isNone && (← get).current.isNone then return
-        let continuation ← newBlock
-        terminate (.br continuation)
-        if let some block := thenOpen then
-          selectBlock block
-          terminate (.br continuation)
+        branchIfOpen continuation
         selectBlock continuation
-    | .forLoop initializer condition post body => do
+    | .forLoop initializer condition post body =>
       if let some statement := initializer then lowerStatement statement
-      if (← get).current.isNone then
-        if let some condition := condition then
-          let _ ← lowerExpr condition
-        modify fun builder => { builder with loops := ⟨none, none⟩ :: builder.loops }
-        lowerStatements body
-        let _ ← popLoop
-        if let some statement := post then lowerStatement statement
-        return
       let header ← newBlock
       let loopBody ← newBlock
-      terminate (.br header)
+      let exit ← newBlock
+      let postBlock ← if post.isSome then some <$> newBlock else pure none
+      branchIfOpen header
       selectBlock header
-      let exit ← match condition with
-        | some condition => do
-          let operand ← lowerExpr condition
-          let exit ← newBlock
-          terminate (.condBr operand loopBody exit)
-          pure (some exit)
-        | none =>
-          terminate (.br loopBody)
-          pure none
+      match condition with
+      | some condition => terminate (.condBr (← lowerExpr condition) loopBody exit)
+      | none => terminate (.br loopBody)
       selectBlock loopBody
-      let continueTarget := if post.isSome then none else some header
-      modify fun builder => { builder with loops := ⟨exit, continueTarget⟩ :: builder.loops }
+      modify fun builder => { builder with loops := ⟨exit, postBlock.getD header⟩ :: builder.loops }
       lowerStatements body
-      jump (isBreak := false)
-      let loopControl ← popLoop
+      branchIfOpen (postBlock.getD header)
+      let _ ← runBuilder (·.popLoop)
       if let some statement := post then
-        if let some postBlock := loopControl.continueTarget then
-          selectBlock postBlock
-          lowerStatement statement
-          terminate (.br header)
-        else
-          lowerStatement statement
-      if let some exit := loopControl.breakTarget then selectBlock exit
+        selectBlock postBlock.get!
+        lowerStatement statement
+        branchIfOpen header
+      selectBlock exit
 
   private partial def lowerStatements (statements : Array Checked.Stmt) : LowerM Unit := do
     for statement in statements do lowerStatement statement
