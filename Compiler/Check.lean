@@ -148,43 +148,39 @@ private def checkCondition (condition : Syntax.Expr) (message : String) : CheckM
   return value
 
 mutual
-  private partial def checkStatement : Syntax.Stmt → CheckM (Checked.Stmt × Context)
-    | .expr (.call callee arguments span) => do
-      return (← checkPrintln callee arguments span, ← read)
+  private partial def checkStatement (statement : Syntax.Stmt) : CheckM (Checked.Stmt × Context) := do
+    let context ← read
+    match statement with
+    | .expr (.call callee arguments span) =>
+      return (← checkPrintln callee arguments span, context)
     | .varDeclaration name typeName initializer => checkDeclaration name typeName initializer
     | .assignment name value => do
-      let some symbol := (← read).scope.find? name.text.copy
+      let some symbol := context.scope.find? name.text.copy
         | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-      let (value', kind) ← (checkOperand value).run (← read)
+      let (value', kind) ← (checkOperand value).run context
       unless kind == symbol.valueKind do
         throw (diagnosticAt value.span "assignment type does not match variable type")
-      return (.assign symbol.id value', ← read)
+      return (.assign symbol.id value', context)
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
     | .return value => do
-      let signature := (← read).signature
+      let signature := context.signature
       unless signature.returnKind == .int do
         throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      let (value', kind) ← (checkOperand value).run (← read)
+      let (value', kind) ← (checkOperand value).run context
       unless kind == .int do throw (diagnosticAt value.span "return value must be int")
-      return (.return value', ← read)
+      return (.return value', context)
     | .break span => do
-      let context ← read
       if context.loopDepth == 0 then throw (diagnosticAt span "break outside loop")
       return (.break, context)
     | .continue span => do
-      let context ← read
       if context.loopDepth == 0 then throw (diagnosticAt span "continue outside loop")
       return (.continue, context)
     | .ifThen condition body elseBody => do
-      let context ← read
       let value ← checkCondition condition "if condition must be bool"
       let yes ← withScope context.scope.enter (checkStatements body)
-      let no ← match elseBody with
-        | some statements => some <$> withScope context.scope.enter (checkStatements statements)
-        | none => pure none
+      let no ← elseBody.mapM fun statements => withScope context.scope.enter (checkStatements statements)
       return (.ifThen value yes no, context)
     | .forLoop initializer condition post body => do
-      let context ← read
       let loopScope := context.scope.enter
       let (init, loopContext) ← match initializer with
         | some statement => do
@@ -192,17 +188,13 @@ mutual
           pure (some checked, next)
         | none => pure (none, { context with scope := loopScope })
       let loopScope := loopContext.scope
-      let test ← match condition with
-        | some condition =>
-          some <$> withScope loopScope (checkCondition condition "for condition must be bool")
-        | none => pure none
+      let test ← condition.mapM fun condition =>
+        withScope loopScope (checkCondition condition "for condition must be bool")
       let bodyContext := { loopContext with scope := loopScope.enter, loopDepth := context.loopDepth + 1 }
       let body' ← withReader (fun _ => bodyContext) (checkStatements body)
-      let post' ← match post with
-        | some statement => do
-          let (checked, _) ← withScope loopScope (checkStatement statement)
-          pure (some checked)
-        | none => pure none
+      let post' ← post.mapM fun statement => do
+        let (checked, _) ← withScope loopScope (checkStatement statement)
+        return checked
       return (.forLoop init test post' body', context)
 
   private partial def checkStatements (statements : Array Syntax.Stmt) : CheckM (Array Checked.Stmt) := do
