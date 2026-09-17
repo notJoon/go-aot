@@ -1,4 +1,5 @@
 import Compiler.Lowering
+import Compiler.Check
 import Compiler.Backend.C
 import Compiler.Backend.LLVM
 import Compiler.IR.Verify
@@ -29,15 +30,16 @@ private def sourceView (source : String) (text : String.Slice) (span : Span)
   fun name => !IR.validName name
 
 #guard match (parse (Source.ofString
-    "package main\nfunc f() int { return 1 }\nfunc f() int { return 2 }\nfunc main() {}\n")).bind Lowering.lower with
+    "package main\nfunc f() int { return 1 }\nfunc f() int { return 2 }\nfunc main() {}\n")).bind Check.check with
   | .error error => error == ⟨.lowering, some ⟨44, 45⟩, "duplicate function 'f'"⟩
   | .ok _ => false
 
 -- Existing phase interfaces reject mixed inputs without result wrappers.
 example : Source → Except Diagnostic Syntax.File := parse
-example : Syntax.File → Except Diagnostic IR.Program := Lowering.lower
+example : Syntax.File → Except Diagnostic Checked.File := Check.check
+example : Checked.File → Except Diagnostic IR.Program := Lowering.lower
 #check_failure fun (raw : Array Token) => parse raw
-#check_failure fun (source : Source) => Lowering.lower source
+#check_failure fun (source : Source) => Check.check source
 #check_failure fun (file : Syntax.File) => Backend.C.emit file
 #check_failure fun (file : Syntax.File) => Backend.LLVM.emit file
 
@@ -190,7 +192,7 @@ private def stringsLLVM := Backend.LLVM.emit stringsProgram
 #guard stringsLLVM.contains "@.int_format =" && stringsLLVM.contains "declare i32 @printf(ptr, ...)"
 
 private def lowered (text : String) : Option IR.Program :=
-  (parse (Source.ofString text) >>= Lowering.lower).toOption
+  (parse (Source.ofString text) >>= Check.check >>= Lowering.lower).toOption
 
 #guard [("010", 8), ("0_10", 8), ("0x10", 16), ("0X_67_7a", 26490),
     ("0b1", 1), ("0b_1010", 10), ("0o7", 7), ("0O7", 7),
@@ -271,6 +273,6 @@ private def lowered (text : String) : Option IR.Program :=
   let some function := file.functions[0]? | return false
   let some (Syntax.Stmt.varDeclaration name _ _) := function.body[0]? | return false
   let file := { file with functions := #[{ function with body := #[.varDeclaration name none none] }] }
-  return match Lowering.lower file with
+  return match Check.check file with
     | .error error => error == ⟨.lowering, some name.span, "variable declaration requires a type or initializer"⟩
     | .ok _ => false

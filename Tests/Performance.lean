@@ -1,4 +1,5 @@
 import Compiler.Lowering
+import Compiler.Check
 import Compiler.IR.Verify
 import Compiler.Backend.LLVM
 
@@ -32,22 +33,32 @@ private def functionSource (count : Nat) : Source := Source.ofString <| Id.run d
 
 @[noinline] private def measureFunctions (file : Syntax.File) : IO Unit := do
   let start ← IO.monoNanosNow
-  let .ok program := Lowering.lower file | throw (IO.userError "function probe failed to lower")
+  let .ok checked := Check.check file | throw (IO.userError "function probe failed to check")
+  let checkedAt ← IO.monoNanosNow
+  let .ok program := Lowering.lower checked | throw (IO.userError "function probe failed to lower")
   let lowered ← IO.monoNanosNow
   let .ok () := IR.verify program | throw (IO.userError "function probe failed verification")
   let verified ← IO.monoNanosNow
-  IO.println s!"{file.functions.size} functions: lower {(lowered - start) / 1000} µs, verify {(verified - lowered) / 1000} µs"
+  IO.println s!"{file.functions.size} functions: check {(checkedAt - start) / 1000} µs, lower {(lowered - checkedAt) / 1000} µs, verify {(verified - lowered) / 1000} µs"
 
-@[noinline] private def loweringAllocations (file : Syntax.File) : IO Nat := do
+@[noinline] private def checkingAllocations (file : Syntax.File) : IO Nat := do
+  IO.setNumHeartbeats 0
+  unless (Check.check file).toBool do throw (IO.userError "literal probe failed to check")
+  IO.getNumHeartbeats
+
+@[noinline] private def loweringAllocations (file : Checked.File) : IO Nat := do
   IO.setNumHeartbeats 0
   unless (Lowering.lower file).toBool do throw (IO.userError "literal probe failed to lower")
   IO.getNumHeartbeats
 
-private def literalAllocations (count : Nat) : IO Nat := do
+private def literalAllocations (count : Nat) : IO (Nat × Nat) := do
   let source := Source.ofString ("package main\nfunc main() {" ++
     String.join (List.replicate count "println(1);") ++ "}\n")
   let .ok file := parse source | throw (IO.userError "literal probe failed to parse")
-  loweringAllocations file
+  let checking ← checkingAllocations file
+  let .ok checked := Check.check file | throw (IO.userError "literal probe failed to check")
+  let lowering ← loweringAllocations checked
+  return (checking, lowering)
 
 @[noinline] private def nameAllocations (name : String) : IO Nat := do
   IO.setNumHeartbeats 0
@@ -74,8 +85,8 @@ def performanceMain : IO Unit := do
   let long ← nameAllocations (String.ofList (List.replicate large 'a'))
   IO.println s!"Name allocations: {short} -> {long}"
   unless long <= short do throw (IO.userError "name validation allocates per character")
-  let short ← literalAllocations small
-  let long ← literalAllocations large
-  IO.println s!"Lowering literal allocations: {short} -> {long}"
+  let (checkShort, short) ← literalAllocations small
+  let (checkLong, long) ← literalAllocations large
+  IO.println s!"Check + lower literal allocations: {checkShort + short} -> {checkLong + long} (check {checkShort} -> {checkLong}, lower {short} -> {long})"
   unless long <= short + 8 * (large - small) do
     throw (IO.userError "lowering exceeds eight allocations per literal statement")
