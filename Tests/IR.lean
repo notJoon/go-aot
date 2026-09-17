@@ -192,6 +192,16 @@ private def stringsLLVM := Backend.LLVM.emit stringsProgram
 private def lowered (text : String) : Option IR.Program :=
   (parse (Source.ofString text) >>= Lowering.lower).toOption
 
+#guard [("010", 8), ("0_10", 8), ("0x10", 16), ("0X_67_7a", 26490),
+    ("0b1", 1), ("0b_1010", 10), ("0o7", 7), ("0O7", 7),
+    ("1_000", 1000), ("0x7FFFFFFFFFFFFFFF", 9223372036854775807)].all
+  fun (literal, value) =>
+    match lowered ("package main\nfunc main() { println(" ++ literal ++ ") }\n") with
+    | some program => match (program.functions[0]?.map (·.blocks) : Option (Array IR.Block)) with
+      | some #[⟨#[.printInt (.literal actual)], .ret none⟩] => actual == value
+      | _ => false
+    | none => false
+
 -- Lowering resolves parameter positions.
 #guard match lowered
     "package main\nfunc f(z int, a int) int { return a - z }\nfunc main() { println(f(1, 2)) }\n" with

@@ -8,6 +8,15 @@ private def failsWith (result : Except Diagnostic α) (expected : Diagnostic) : 
   | .error actual => actual == expected
   | .ok _ => false
 
+#guard ["9223372036854775808", "0x8000000000000000"].all fun literal =>
+  let before := "package main\nfunc main() { println("
+  let source := Source.ofString (before ++ literal ++ ") }\n")
+  let expected : Diagnostic := ⟨.lowering,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + literal.utf8ByteSize⟩,
+    "integer literal exceeds signed 64-bit range"⟩
+  failsWith (parse source >>= Lowering.lower) expected &&
+    failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+
 -- Check stage provenance survives both parser composition and public compile entry points.
 #guard [("0o8", Diagnostic.mk .lexer (some ⟨2, 2⟩) "expected octal digit",
       "1:3: expected octal digit"),

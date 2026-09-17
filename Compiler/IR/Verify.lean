@@ -33,7 +33,7 @@ def VerifyError.render (error : VerifyError) : String := Id.run do
         | throw s!"value {id} is not defined earlier in this block"
       pure kind
     | .literal value => do
-      if value > 9223372036854775807 then
+      if value > maxSignedInt64 then
         throw "integer literal exceeds signed 64-bit range"
       pure .int
     | .argument index => do

@@ -4,6 +4,8 @@ public section
 
 namespace GoAot.IR
 
+def maxSignedInt64 : Nat := 9223372036854775807
+
 abbrev ValueId := Nat
 
 /-- Identifies a mutable stack slot within a function, independently of value IDs. -/

@@ -17,6 +17,19 @@ def isHexDigit (c : Char) : Bool :=
 def digitValue (c : Char) : Nat :=
   if c.isDigit then c.toNat - '0'.toNat else c.toLower.toNat - 'a'.toNat + 10
 
+/-- Decode an integer literal already validated by the lexer. -/
+def decodeInt (literal : String.Slice) : Nat := Id.run do
+  let (base, digits) :=
+    if literal.startsWith "0" then
+      match (literal.drop 1).front? with
+      | some 'x' | some 'X' => (16, literal.drop 2)
+      | some 'b' | some 'B' => (2, literal.drop 2)
+      | some 'o' | some 'O' => (8, literal.drop 2)
+      | _ => (8, literal)
+    else (10, literal)
+  return digits.foldl (fun value c =>
+    if c == '_' then value else value * base + digitValue c) 0
+
 /--
 A numeric escape's radix, digit width, and completion rule.
 -/

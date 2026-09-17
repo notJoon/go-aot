@@ -159,13 +159,11 @@ private structure LoweredOperand where
 
 private partial def lowerOperand (all : Std.HashMap String Signature) (scope : Scope)
     (builder : Builder) : Syntax.Expr → Except Diagnostic LoweredOperand
-  | .intLiteral text span =>
-    match text.toNat? with
-    | some value => do
-      if value > 9223372036854775807 then
-        throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
-      return ⟨.literal value, .int, builder⟩
-    | none => throw (diagnosticAt span s!"unsupported integer literal '{text}'")
+  | .intLiteral text span => do
+    let value := Literal.decodeInt text
+    if value > IR.maxSignedInt64 then
+      throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
+    return ⟨.literal value, .int, builder⟩
   | .identifier name => do
     let some symbol := scope.find? name.text.copy
       | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
