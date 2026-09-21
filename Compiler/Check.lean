@@ -177,13 +177,18 @@ mutual
         throw (diagnosticAt value.span "assignment type does not match variable type")
       return (.assign symbol.id value', context)
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
-    | .return value => do
+    | .return value span => do
       let signature := context.signature
-      unless signature.returnKind == .int do
+      match signature.returnKind, value with
+      | .void, none => return (.return none, context)
+      | .void, some value =>
         throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      let (value', kind) ← (checkOperand value).run context
-      unless kind == .int do throw (diagnosticAt value.span "return value must be int")
-      return (.return value', context)
+      | .int, none =>
+        throw (diagnosticAt span s!"function '{signature.name}' must return a value")
+      | .int, some value =>
+        let (value', kind) ← (checkOperand value).run context
+        unless kind == .int do throw (diagnosticAt value.span "return value must be int")
+        return (.return (some value'), context)
     | .break span => do
       if context.loopDepth == 0 then throw (diagnosticAt span "break outside loop")
       return (.break, context)
@@ -230,12 +235,12 @@ private partial def hasOwnBreak (statements : Array Syntax.Stmt) : Bool :=
       hasOwnBreak yes || (elseBody.map hasOwnBreak).getD false
     -- A nested loop consumes its own break.
     | .forLoop .. => false
-    | .varDeclaration .. | .assignment .. | .expr _ | .return _ | .continue _ => false
+    | .varDeclaration .. | .assignment .. | .expr _ | .return .. | .continue _ => false
 
 -- Return rules describe source syntax, even when CFG edges later make a path unreachable.
 private partial def isTerminating (statements : Array Syntax.Stmt) : Bool :=
   match statements.back? with
-  | some (.return _) => true
+  | some (.return ..) => true
   | some (.ifThen _ yes (some no)) => isTerminating yes && isTerminating no
   | some (.forLoop _ none _ body) => !hasOwnBreak body
   | _ => false

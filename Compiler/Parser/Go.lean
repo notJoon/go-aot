@@ -210,10 +210,11 @@ mutual
     return .expr value
 
   private partial def returnStatement (source : Source) : P Syntax.Stmt := do
-    let _ ← keyword "return"
-    let value ← expression source
+    let token ← keyword "return"
+    let value ← if (← peekSemicolon) || (← peekSymbol "}") then pure none
+      else some <$> expression source
     statementEnd
-    return .return value
+    return .return value token.span
 
   private partial def ifStatement (source : Source) : P Syntax.Stmt := do
     let result ← ifClause source

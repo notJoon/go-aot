@@ -80,7 +80,7 @@ mutual
       for argument in arguments do
         lowered := lowered.push (← lowerExpr argument)
       emit (.callVoid function.name lowered)
-    | .return value => terminate (.ret (some (← lowerExpr value)))
+    | .return value => terminate (.ret (← value.mapM lowerExpr))
     | .break => jump (isBreak := true)
     | .continue => jump (isBreak := false)
     | .ifThen condition body elseBody =>

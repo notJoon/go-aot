@@ -18,7 +18,7 @@ private def sourceView (source : String) (text : String.Slice) (span : Span)
   let some function := file.functions[0]? | return false
   let some parameter := function.parameters[0]? | return false
   let some resultType := function.resultType | return false
-  let some (Syntax.Stmt.return (.call callee arguments _)) := function.body[0]? | return false
+  let some (Syntax.Stmt.return (some (.call callee arguments _)) _) := function.body[0]? | return false
   let some (Syntax.Expr.binary .add (.identifier name) (.intLiteral text span) _) := arguments[0]?
     | return false
   return [(file.packageName, "main"), (function.name, "계산"), (parameter.name, "값"),

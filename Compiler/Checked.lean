@@ -23,7 +23,7 @@ inductive Stmt where
   | printString (bytes : ByteArray)
   | printInt (value : Expr)
   | callVoid (function : FunctionId) (arguments : Array Expr)
-  | return (value : Expr)
+  | return (value : Option Expr)
   | ifThen (condition : Expr) (body : Array Stmt) (elseBody : Option (Array Stmt))
   | forLoop (initializer : Option Stmt) (condition : Option Expr) (post : Option Stmt)
       (body : Array Stmt)
