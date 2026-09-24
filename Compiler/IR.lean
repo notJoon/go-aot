@@ -87,7 +87,7 @@ inductive Instruction where
   | convert (result : ValueId) (source target : Ty) (value : Operand)
   /-- Calls `name`, defining one value per callee result. -/
   | call (results : Array ValueId) (name : String) (arguments : Array Operand)
-  -- Source escapes are decoded during checking so every backend receives identical bytes.
+  -- Source escapes are decoded during checking, so the backend receives the final bytes.
   | printString (bytes : ByteArray)
   | print (ty : Ty) (value : Operand)
 

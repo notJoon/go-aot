@@ -164,7 +164,7 @@ def simpleEscape? : Char → Option UInt8
   | _ => none
 
 /--
-Decode an interpreted string literal once at the semantic boundary so backends never reinterpret Go syntax.
+Decode an interpreted string literal once at the semantic boundary so the backend never reinterprets Go syntax.
 The input keeps its surrounding quotes and must already be accepted by the lexer, which validates escapes.
 Unescaped bytes are copied as they are because `\` never occurs inside a multibyte UTF-8 sequence.
 

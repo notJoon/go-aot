@@ -16,7 +16,7 @@ private def failsWith (result : Except Diagnostic α) (expected : Diagnostic) : 
     some ⟨before.utf8ByteSize, before.utf8ByteSize + literal.utf8ByteSize⟩,
     "constant 9223372036854775808 overflows int"⟩
   failsWith (parse source >>= Check.check) expected &&
-    failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+    failsWith (compileToLLVM source) expected
 
 -- Check stage provenance survives both parser composition and public compile entry points.
 #guard [("0o8", Diagnostic.mk .lexer (some ⟨2, 2⟩) "expected octal digit",
@@ -29,7 +29,6 @@ private def failsWith (result : Except Diagnostic α) (expected : Diagnostic) : 
       "expected main function")].all fun (text, expected, rendered) =>
   let source := Source.ofString text
   failsWith (parse source >>= Check.check) expected &&
-  failsWith (compileToC source) expected &&
   failsWith (compileToLLVM source) expected &&
   expected.render source == rendered &&
   (expected.phase != .lexer || failsWith (lex source) expected) &&
@@ -44,7 +43,6 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
 #guard match parse utf8Source with
   | .ok file => failsWith (Check.check file) utf8Expected
   | .error _ => false
-#guard failsWith (compileToC utf8Source) utf8Expected
 #guard failsWith (compileToLLVM utf8Source) utf8Expected
 #guard utf8Expected.render utf8Source == "2:39: unknown identifier 'missing'"
 #guard (utf8Source.slice? utf8Expected.span?.get!).map (·.copy) == some "missing"
@@ -55,7 +53,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + call.utf8ByteSize⟩,
     "println expects one argument"⟩
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard [("package main\nfunc f() int { return 1; println(", "); return 2 }\nfunc main() {}",
       "missing", "unknown identifier 'missing'"),
@@ -66,16 +64,15 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
   let source := Source.ofString (before ++ token ++ after)
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard
   let source := Source.ofString
     "package main\nfunc f() int { return 1; println(2) }\nfunc main() {}"
-  [compileToC, compileToLLVM].all fun compile =>
-    match compile source with
-    | .error diagnostic =>
-      diagnostic.phase == .lowering && diagnostic.message == "function 'f' must end with return"
-    | .ok _ => false
+  match compileToLLVM source with
+  | .error diagnostic =>
+    diagnostic.phase == .lowering && diagnostic.message == "function 'f' must end with return"
+  | .ok _ => false
 
 #guard (Diagnostic.mk .lexer (some ⟨5, 5⟩) "invalid span").render (Source.ofString "") ==
   "offset 5: invalid span"
@@ -101,8 +98,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     let source := Source.ofString (before ++ token ++ after)
     let expected : Diagnostic := ⟨.parser,
       some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
-    failsWith (parse source) expected && failsWith (compileToC source) expected &&
-      failsWith (compileToLLVM source) expected
+    failsWith (parse source) expected && failsWith (compileToLLVM source) expected
 
 -- Source locations distinguish an existing binding from the later offending declaration or use.
 #guard [
@@ -117,7 +113,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     let source := Source.ofString (before ++ token ++ after ++ " }")
     let expected : Diagnostic := ⟨.lowering,
       some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
-    failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+    failsWith (compileToLLVM source) expected
 
 -- Extra return values are reported at the first value beyond the declared results.
 #guard
@@ -125,7 +121,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
   let source := Source.ofString (before ++ "2 }\nfunc main() {}")
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "too many return values in function 'f'"⟩
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard [
     ("break", "break outside loop"),
@@ -134,14 +130,14 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
   let source := Source.ofString (before ++ keyword ++ " }")
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + keyword.utf8ByteSize⟩, message⟩
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard
   let before := "package main\nfunc main() { for "
   let source := Source.ofString (before ++ "1 { println(2) } }")
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "for condition must be bool"⟩
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard ["break", "continue"].all fun keyword =>
   let before := "package main\nfunc main() { for { " ++ keyword ++ " "
@@ -149,7 +145,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
   let expected : Diagnostic := ⟨.parser,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩,
     s!"labeled {keyword} is unsupported"⟩
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard
   let before := "package main\n"
@@ -159,14 +155,14 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + function.utf8ByteSize⟩,
     "function 'f' must end with return"⟩
 
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard
   let before := "package main\nfunc main() { for i := 0; i < 1; i = i + 1 {}; println("
   let source := Source.ofString (before ++ "i) }")
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "unknown identifier 'i'"⟩
-  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+  failsWith (compileToLLVM source) expected
 
 #guard [
     ("for { break; var x int; ", "x", " := 1 }", "duplicate declaration 'x'"),
@@ -176,4 +172,4 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     let source := Source.ofString (before ++ token ++ afterToken ++ " }")
     let expected : Diagnostic := ⟨.lowering,
       some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
-    failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
+    failsWith (compileToLLVM source) expected
