@@ -49,7 +49,8 @@ private def checkCompileGolden (name : String) : IO Unit := do
       let cPath := dir / "program.c"
       let exePath := dir / "program"
       IO.FS.writeFile cPath actual
-      discard <| IO.Process.run { cmd := ← ccCommand, args := #[cPath.toString, "-o", exePath.toString] }
+      discard <| IO.Process.run {
+        cmd := ← ccCommand, args := #["-Werror=unused-variable", cPath.toString, "-o", exePath.toString] }
       let output ← IO.Process.run { cmd := exePath.toString }
       check (output == expectedOutput) s!"wrong native output: {repr output}"
   | .error diagnostic =>
