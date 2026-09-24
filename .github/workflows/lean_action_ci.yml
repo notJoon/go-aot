@@ -1,7 +1,9 @@
 name: Lean Action CI
 
 on:
+  # Pull requests already run on every commit, so pushes only need checking once they land.
   push:
+    branches: [main]
     paths:
       - '**.lean'
       - 'Tests/**'
@@ -19,13 +21,21 @@ on:
       - '.github/workflows/lean_action_ci.yml'
   workflow_dispatch:
 
+# A new commit on a pull request makes the run for the previous one obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Linux on both architectures, and arm64 macOS. The arm64 runners also compare
+        # float_conversion with gc, which only matches there (#60).
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v5
