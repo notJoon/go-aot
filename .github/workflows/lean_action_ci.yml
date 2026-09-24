@@ -29,4 +29,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      # lake test checks the golden outputs against gc when Go 1.26 or later is installed.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
       - uses: leanprover/lean-action@v1

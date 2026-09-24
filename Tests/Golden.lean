@@ -79,16 +79,21 @@ private def checkProgram (name : String) : IO Unit := do
 
 /--
 The expected outputs are gc's: `go run` must print each `.out.golden` exactly. Go's `println`
-writes to stderr. Skipped when `go`, or the command in `GO`, is not installed.
+writes to stderr. Go 1.26 is the first version checked to print floats in the shortest form the
+goldens use, so the check is skipped when `go`, or the command in `GO`, is missing or older.
 -/
 private def checkGoOracle (names : Array String) : IO Unit := do
   let go := (← IO.getEnv "GO").getD "go"
-  let available ← try
-      let version ← IO.Process.output { cmd := go, args := #["version"] }
-      pure (version.exitCode == 0)
-    catch _ => pure false
-  unless available do
-    IO.println "Go oracle skipped: go is not installed"
+  let version ← try
+      let output ← IO.Process.output { cmd := go, args := #["env", "GOVERSION"] }
+      pure (if output.exitCode == 0 then output.stdout.trimAscii.copy else "")
+    catch _ => pure ""
+  -- `go1.26.2` and `go1.26rc1` both have minor version 26.
+  let minor := match (version.dropPrefix "go1.").copy.splitOn "." with
+    | minor :: _ => (minor.takeWhile Char.isDigit).copy.toNat?
+    | [] => none
+  unless version.startsWith "go1." && minor.any (· ≥ 26) do
+    IO.println s!"Go oracle skipped: needs go1.26 or later, found '{version}'"
     return
   -- Each `go run` mostly waits on the Go toolchain, so they run concurrently.
   let runs ← names.mapM fun name =>
