@@ -50,15 +50,14 @@ private def inner : Scope :=
     let source := Source.ofString (before ++ token ++ after)
     let expected : Diagnostic := ⟨.lowering,
       some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
-    [compileToC, compileToLLVM].all fun compile =>
-      match compile source with
-      | .error actual => actual == expected
-      | .ok _ => false
+    match compileToLLVM source with
+    | .error actual => actual == expected
+    | .ok _ => false
 
 #guard
   let source := Source.ofString
     "package main\nfunc f(x int, y int) int { if x < y { if y < 3 { return y } }; return x }\nfunc main() { println(f(1, 2)) }"
-  (compileToC source).toBool && (compileToLLVM source).toBool
+  (compileToLLVM source).toBool
 
 -- Declarations become visible after the initializer and remain in their lexical scope.
 #guard [
@@ -84,14 +83,12 @@ private def inner : Scope :=
     ("func f() int { return 1; x = 2; return 0 }; func main() {}", "unknown identifier 'x'")].all
   fun (body, message) =>
     let source := Source.ofString ("package main\n" ++ body)
-    [compileToC, compileToLLVM].all fun compile =>
-      match compile source with
-      | .error actual => actual.phase == .lowering && actual.message == message
-      | .ok _ => false
+    match compileToLLVM source with
+    | .error actual => actual.phase == .lowering && actual.message == message
+    | .ok _ => false
 
 #guard
   let source := Source.ofString "package main\nfunc main() { var x int; x = 1 < 2 }"
-  [compileToC, compileToLLVM].all fun compile =>
-    match compile source with
-    | .error actual => actual.render source == "2:30: assignment type does not match variable type"
-    | .ok _ => false
+  match compileToLLVM source with
+  | .error actual => actual.render source == "2:30: assignment type does not match variable type"
+  | .ok _ => false

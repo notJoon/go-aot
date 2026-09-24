@@ -27,18 +27,28 @@ I may change my mind and implement some of these later, but they are not goals f
 ![Structure](structure_adr.JPG)
 
 Compilation parses source into syntax, checks names and types into a resolved tree,
-then lowers that tree to IR. IR verification runs before either backend.
+then lowers that tree to IR. IR verification runs before the LLVM backend.
 
 ## Backends
 
-The CLI temporarily uses the C backend by default while the LLVM path is validated.
-The LLVM backend emits target independent LLVM IR and asks Clang to optimize,
-generate host machine code, and link it. After the correctness and benchmark gates
-are complete, LLVM becomes the only backend and the C backend is removed.
+The compiler emits target independent LLVM IR and asks Clang to optimize, generate host
+machine code, and link it. It invokes `clang -O2 -x ir`, and the generated IR contains no
+hard-coded target triple or data layout.
+
+LLVM is the only backend. A C backend served as a second implementation to compare against
+while the language core was built, and was removed once the core was complete (#13). It shares
+the parser, checker, lowering, and IR with the LLVM backend, so comparing the two only caught
+code generation differences. Every feature had to be written twice, and the runtime work ahead,
+such as precise stack maps for the collector, unwinding, and goroutines, relies on LLVM features
+C cannot express.
+
+Correctness is measured against gc instead. The expected output of every golden program is
+what gc's build of it prints, and `lake test` runs each program with `go run` to confirm this
+when Go is installed.
 
 Values are `bool`, `int`, `int8` to `int64`, `uint`, `uint8` to `uint64`, and `float64`.
-Functions can return several results. [docs/ABI.md](docs/ABI.md) records how each backend
-represents values, parameters, and results.
+Functions can return several results. [docs/ABI.md](docs/ABI.md) records how values,
+parameters, and results are represented, and the layouts decided for later types.
 
 Untyped constants are exact, as in Go, and take their type from the context or default to
 `int` or `float64`. A constant that overflows its type or truncates a fraction is a compile
@@ -46,9 +56,7 @@ error. Expressions on typed constants, such as `int8(100) * 2`, are not folded, 
 run time where Go reports an overflow. Hexadecimal float literals and the `byte` and `rune`
 aliases are not supported yet.
 
-Integer arithmetic wraps at the width of its type in both backends. C computes `+`, `-`, `*`,
-and bitwise operators on `uint64_t` and converts back, because C leaves signed overflow undefined.
-Division and remainder follow Go. Dividing by a constant zero is a compile error. Dividing by
+Integer arithmetic wraps at the width of its type. Division and remainder follow Go. Dividing by a constant zero is a compile error. Dividing by
 zero at run time flushes stdout, writes `panic: runtime error: integer divide by zero` to
 stderr, and exits with status 2. Go also prints a goroutine trace, which this runtime does not
 have. The most negative value divided by -1 wraps to itself with remainder 0. A shift by a
@@ -56,15 +64,12 @@ count at or above the width gives 0, or -1 for a negative signed value shifted r
 negative count panics with `panic: runtime error: negative shift amount`.
 
 Converting a float to an integer truncates toward zero. Go leaves out of range results to the
-implementation. Like gc on arm64, both backends saturate at the target range, NaN becomes 0,
+implementation. Like gc on arm64, the conversion saturates at the target range, NaN becomes 0,
 and a target narrower than 32 bits saturates at 32 bits and then truncates, so `uint8(300.0)`
 is 44.
 
 `println` prints a float64 as Go does, the shortest digits that round trip in `%e` form when the
 exponent is below -4 or at least 6: `0.3`, `1.23456789e+08`, `-0`, `+Inf`, `NaN`.
-
-The LLVM backend invokes `clang -O2 -x ir`; generated IR contains no hard-coded target
-triple or data layout. The temporary C backend uses the system `cc`.
 
 ## How to Run
 
@@ -73,16 +78,11 @@ Compile a Go file and run the program:
 	lake exe goaot Tests/Golden/hello.go -o hello
 	./hello
 
-Select a backend with `--backend`:
-
-	lake exe goaot input.go -o program --backend llvm
-	lake exe goaot input.go -o program --backend c
-
-An output ending in `.ll` or `.c` saves the generated LLVM IR or C code instead of building a program:
+An output ending in `.ll` saves the generated LLVM IR instead of building a program:
 
 	lake exe goaot input.go -o program.ll
-	lake exe goaot input.go -o program.c
 
-Run the tests. `CC` and `CLANG` select the host compilers:
+Run the tests. `CLANG` selects the host compiler, and `GO` the Go command used to check the
+expected outputs against gc:
 
 	lake test

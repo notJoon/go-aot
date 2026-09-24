@@ -1,6 +1,5 @@
 import Compiler.Lowering
 import Compiler.Check
-import Compiler.Backend.C
 import Compiler.Backend.LLVM
 import Compiler.IR.Verify
 import Compiler.Lowering.Builder
@@ -41,7 +40,6 @@ example : Syntax.File → Except Diagnostic Checked.File := Check.check
 example : Checked.File → Except Diagnostic IR.Program := Lowering.lower
 #check_failure fun (raw : Array Token) => parse raw
 #check_failure fun (source : Source) => Check.check source
-#check_failure fun (file : Syntax.File) => Backend.C.emit file
 #check_failure fun (file : Syntax.File) => Backend.LLVM.emit file
 
 private def intValue : IR.Operand := .literal 1
@@ -49,8 +47,7 @@ private def comparison : IR.Instruction := .binary 0 .less .int intValue intValu
 private def boolValue : IR.Operand := .value 0
 #check_failure (show IR.Block from { instructions := #[] })
 
--- Both backends have the same success contract for lowered programs.
-example : IR.Program → String := Backend.C.emit
+-- The backend cannot fail on verified IR.
 example : IR.Program → String := Backend.LLVM.emit
 example : IR.Program → Except IR.VerifyError Unit := IR.verify
 
@@ -226,10 +223,6 @@ private def pairFunction : IR.Function :=
 -- Exercise the backend field contract for non-main void functions.
 private def voidProgram : IR.Program := ⟨#[mainFunction, { mainFunction with name := "f" }]⟩
 #guard accepted voidProgram
-#guard
-  let c := Backend.C.emit voidProgram
-  c.contains "int main(void)" && c.contains "return 0;" &&
-    c.contains "static void go_f(void)" && c.contains "return;"
 #guard
   let llvm := Backend.LLVM.emit voidProgram
   llvm.contains "define i32 @main()" && llvm.contains "ret i32 0" &&

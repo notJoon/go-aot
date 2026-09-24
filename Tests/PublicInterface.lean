@@ -2,7 +2,6 @@ module
 
 import GoAot
 
-example : GoAot.Source → Except GoAot.Diagnostic String := GoAot.compileToC
 example : GoAot.Source → Except GoAot.Diagnostic String := GoAot.compileToLLVM
 example : GoAot.Diagnostic → GoAot.Phase := (·.phase)
 example : GoAot.Diagnostic → GoAot.Source → String := GoAot.Diagnostic.render
@@ -17,6 +16,5 @@ example : GoAot.Diagnostic → GoAot.Source → String := GoAot.Diagnostic.rende
 #check_failure GoAot.Lowering.lower
 #check_failure GoAot.Check.check
 #check_failure GoAot.Checked.File
-#check_failure GoAot.Backend.C.emit
 #check_failure GoAot.Backend.LLVM.emit
 #check_failure GoAot.Lexer.Internal.insertSemicolons
