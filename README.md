@@ -42,7 +42,7 @@ code generation differences. Every feature had to be written twice, and the runt
 such as precise stack maps for the collector, unwinding, and goroutines, relies on LLVM features
 C cannot express.
 
-Correctness is measured against gc instead. The expected output of every golden program is
+Correctness is measured against gc instead. The expected output of every test program is
 what gc's build of it prints, and `lake test` runs each program with `go run` to confirm this
 when Go is installed.
 
@@ -75,14 +75,14 @@ exponent is below -4 or at least 6: `0.3`, `1.23456789e+08`, `-0`, `+Inf`, `NaN`
 
 Compile a Go file and run the program:
 
-	lake exe goaot Tests/Golden/hello.go -o hello
+	lake exe goaot Tests/Cases/run/hello.go -o hello
 	./hello
 
 An output ending in `.ll` saves the generated LLVM IR instead of building a program:
 
 	lake exe goaot input.go -o program.ll
 
-Run the tests. `CLANG` selects the host compiler, and `GO` the Go command used to check the
-expected outputs against gc:
+Run the tests. [Tests/README.md](Tests/README.md) describes the test cases, how to run a subset,
+and how to update expected files:
 
 	lake test
