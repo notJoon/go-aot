@@ -224,7 +224,17 @@ mutual
   private partial def simpleStatement (source : Source) : P Syntax.Stmt := do
     let start ← fun it => .ok it it
     let value ← expression source
-    if let .identifier _ := value then rejectMultiple
+    if let .identifier first := value then
+      if ← peekSymbol "," then
+        let mut names := #[first]
+        while ← peekSymbol "," do
+          let _ ← symbol ","
+          names := names.push (← identifier source)
+        let define ← peekSymbol ":="
+        let _ ← symbol (if define then ":=" else "=")
+        let value ← expression source
+        rejectMultiple
+        return .multiAssignment names define value
     match ← Parser.peek? with
     | some { kind := .symbol op, .. } =>
       if op == "++" || op == "--" then
@@ -245,10 +255,14 @@ mutual
 
   private partial def returnStatement (source : Source) : P Syntax.Stmt := do
     let token ← keyword "return"
-    let value ← if (← peekSemicolon) || (← peekSymbol "}") then pure none
-      else some <$> expression source
+    let mut values := #[]
+    unless (← peekSemicolon) || (← peekSymbol "}") do
+      values := #[← expression source]
+      while ← peekSymbol "," do
+        let _ ← symbol ","
+        values := values.push (← expression source)
     statementEnd
-    return .return value token.span
+    return .return values token.span
 
   private partial def ifStatement (source : Source) : P Syntax.Stmt := do
     let result ← ifClause source
@@ -287,7 +301,7 @@ mutual
     let condition ← if ← peekSemicolon then pure none else some <$> expression source
     let _ ← semicolon
     let post ← if ← peekSymbol "{" then pure none else some <$> simpleStatement source
-    if let some (.varDeclaration ..) := post then
+    if post matches some (.varDeclaration ..) || post matches some (.multiAssignment _ true _) then
       Parser.fail "for post statement cannot declare a variable"
     return (initializer, condition, post)
 
@@ -313,16 +327,29 @@ private def parameterList (source : Source) : P (Array Syntax.Parameter) := do
     parameters := parameters.push (← parameter source)
   return parameters
 
+/-- A single result type, or a parenthesized list of unnamed result types. -/
+private def resultList (source : Source) : P (Array Syntax.Ident) := do
+  if ← peekSymbol "{" then return #[]
+  unless ← peekSymbol "(" do return #[← identifier source]
+  let _ ← symbol "("
+  let mut results := #[← identifier source]
+  if let some { kind := .identifier, .. } ← Parser.peek? then Parser.fail "named results are unsupported"
+  while ← peekSymbol "," do
+    let _ ← symbol ","
+    results := results.push (← identifier source)
+  let _ ← symbol ")"
+  return results
+
 private def functionDecl (source : Source) : P Syntax.FunctionDecl := do
   let first ← keyword "func"
   let name ← identifier source
   let _ ← symbol "("
   let parameters ← parameterList source
   let _ ← symbol ")"
-  let resultType ← if ← peekSymbol "{" then pure none else some <$> identifier source
+  let results ← resultList source
   let (body, last) ← block source
   let _ ← semicolon
-  return ⟨name, parameters, resultType, body, ⟨first.span.start, last.span.stop⟩⟩
+  return ⟨name, parameters, results, body, ⟨first.span.start, last.span.stop⟩⟩
 
 private def file (source : Source) : P Syntax.File := do
   let packageName ← packageClause source

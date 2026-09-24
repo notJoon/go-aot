@@ -78,6 +78,10 @@ def Builder.jump (builder : Builder) (isBreak : Bool) : Except Diagnostic Builde
   let context :: _ := builder.loops | throw builderError
   builder.terminate (.br (if isBreak then context.breakTarget else context.continueTarget))
 
+/-- Reserve `count` fresh value IDs for an instruction that defines several values. -/
+def Builder.freshValues (builder : Builder) (count : Nat) : Array IR.ValueId × Builder :=
+  (Array.range' builder.nextValue count, { builder with nextValue := builder.nextValue + count })
+
 def Builder.emitValue (builder : Builder) (instruction : IR.ValueId → IR.Instruction) :
     Except Diagnostic (IR.Operand × Builder) := do
   let id := builder.nextValue

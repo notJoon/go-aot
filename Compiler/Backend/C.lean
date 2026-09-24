@@ -71,12 +71,12 @@ private def usedValues (block : IR.Block) : Std.HashSet IR.ValueId := Id.run do
     used := match instruction with
       | .store _ _ value | .print _ value | .convert _ _ _ value => add used value
       | .binary _ _ _ left right | .shift _ _ _ left _ right => add (add used left) right
-      | .call _ _ arguments | .callVoid _ arguments => arguments.foldl add used
+      | .call _ _ arguments => arguments.foldl add used
       | .alloca .. | .load .. | .printString _ => used
   return match block.terminator with
     | .condBr condition .. => add used condition
-    | .ret (some value) => add used value
-    | .br _ | .ret none => used
+    | .ret values => values.foldl add used
+    | .br _ => used
 
 private def emitArguments (parameters : Array IR.Parameter) (output : String)
     (arguments : Array IR.Operand) : String := Id.run do
@@ -135,10 +135,9 @@ private def emitConvert (parameters : Array IR.Parameter) (output : String) (sou
         intLiteral wide.maxValue ++ ")"
   else emitOperand parameters output value
 
-private def resultType (functions : Std.HashMap String IR.Function) (name : String) : Ty :=
-  match functions[name]? with
-  | some { returnKind := .value ty, .. } => ty
-  | _ => .int
+/-- A function with two or more results returns this struct, with fields `r0`, `r1`, and so on. -/
+private def resultsStruct (name : String) : String :=
+  "struct " ++ Symbol.function name ++ "_results"
 
 -- Explicit byte counts preserve embedded NUL values during string output.
 private def emitInstructions (functions : Std.HashMap String IR.Function)
@@ -164,13 +163,21 @@ private def emitInstructions (functions : Std.HashMap String IR.Function)
     | .convert id source target value =>
       output := emitConvert parameters (output ++ s!"    {cType target} tmp_{id} = ") source target
         value ++ ";\n"
-    | .call id name arguments =>
+    | .call results name arguments =>
+      let types := (functions[name]?.map (·.results)).getD #[]
+      -- One result is a plain value, and several arrive in the callee's results struct.
+      let holder := s!"results_{results[0]?.getD 0}"
       output := output ++ "    "
-      if used.contains id then
-        output := output ++ cType (resultType functions name) ++ " tmp_" ++ toString id ++ " = "
+      if let #[id] := results then
+        if used.contains id then output := output ++ s!"{cType (types[0]?.getD .int)} tmp_{id} = "
+      else if results.any used.contains then
+        output := output ++ resultsStruct name ++ " " ++ holder ++ " = "
       output := emitArguments parameters (output ++ Symbol.function name) arguments
-    | .callVoid name arguments =>
-      output := emitArguments parameters (output ++ "    " ++ Symbol.function name) arguments
+      if results.size ≥ 2 then
+        for h : index in [:results.size] do
+          let id := results[index]
+          if used.contains id then
+            output := output ++ s!"    {cType (types[index]?.getD .int)} tmp_{id} = {holder}.r{index};\n"
     | .printString bytes =>
       output := emitBytes (output ++ "    fwrite(\"") bytes ++
         "\", 1, " ++ toString bytes.size ++ ", stdout); putchar('\\n');\n"
@@ -188,14 +195,21 @@ private def emitTerminator (function : IR.Function) (output : String) : IR.Termi
   | .condBr condition ifTrue ifFalse =>
     emitOperand function.parameters (output ++ "    if (") condition ++ ") goto bb" ++
       toString ifTrue ++ "; else goto bb" ++ toString ifFalse ++ ";\n"
-  | .ret none =>
+  | .ret #[] =>
     output ++ (if Symbol.returnsVoid function then "    return;\n" else "    return 0;\n")
-  | .ret (some value) => emitOperand function.parameters (output ++ "    return ") value ++ ";\n"
+  | .ret #[value] => emitOperand function.parameters (output ++ "    return ") value ++ ";\n"
+  | .ret values => Id.run do
+    let mut output := output ++ "    return (" ++ resultsStruct function.name ++ "){"
+    for h : index in [:values.size] do
+      if index != 0 then output := output ++ ", "
+      output := emitOperand function.parameters output values[index]
+    return output ++ "};\n"
 
 private def emitHeader (output : String) (function : IR.Function) : String :=
-  let result := match function.returnKind with
-    | .value ty => cType ty
-    | .void => if Symbol.isEntry function then "int" else "void"
+  let result := match function.results with
+    | #[] => if Symbol.isEntry function then "int" else "void"
+    | #[ty] => cType ty
+    | _ => resultsStruct function.name
   emitParameters (output ++ result ++ " " ++ Symbol.function function.name ++ "(") function.parameters ++ ")"
 
 private def lines (text : List String) : String :=
@@ -300,6 +314,12 @@ def emit (program : IR.Program) : String := Id.run do
       (unsignedDivide, unsignedDivideHelpers), (shift, shiftHelper),
       (floatToInt, floatToIntHelpers), (printFloat, printFloatHelper)] do
     if needed then output := output ++ "\n\n" ++ helper
+  for function in program.functions do
+    if function.results.size ≥ 2 then
+      output := output ++ "\n\n" ++ resultsStruct function.name ++ " {"
+      for h : index in [:function.results.size] do
+        output := output ++ " " ++ cType function.results[index] ++ " r" ++ toString index ++ ";"
+      output := output ++ " };"
   let mut hasPrototype := false
   for function in program.functions do
     if !Symbol.isEntry function then

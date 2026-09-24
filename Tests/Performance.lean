@@ -7,7 +7,7 @@ open GoAot
 
 private def verificationProgram (count : Nat) : IR.Program :=
   let instructions := Array.replicate count (IR.Instruction.print .int (.literal 1))
-  ⟨#[⟨"main", #[], .void, #[⟨instructions, .ret none⟩]⟩]⟩
+  ⟨#[⟨"main", #[], #[], #[⟨instructions, .ret #[]⟩]⟩]⟩
 
 @[noinline] private def verificationAllocations (program : IR.Program) : IO Nat := do
   IO.setNumHeartbeats 0
@@ -21,8 +21,8 @@ private def verificationProgram (count : Nat) : IR.Program :=
   IO.getNumHeartbeats
 
 private def bytesProgram (count : Nat) : IR.Program :=
-  ⟨#[⟨"main", #[], .void,
-    #[⟨#[.printString ⟨Array.replicate count 97⟩], .ret none⟩]⟩]⟩
+  ⟨#[⟨"main", #[], #[],
+    #[⟨#[.printString ⟨Array.replicate count 97⟩], .ret #[]⟩]⟩]⟩
 
 private def functionSource (count : Nat) : Source := Source.ofString <| Id.run do
   let mut text := "package main\nfunc main() { println(f0()) }\n"

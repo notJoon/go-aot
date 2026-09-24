@@ -42,6 +42,10 @@ def Scope.enter (scope : Scope) : Scope :=
 def Scope.find? (scope : Scope) (name : String) : Option Symbol :=
   scope.current.find? name <|> scope.parents.findSome? (·.find? name)
 
+/-- Returns the binding of `name` in the current scope only, ignoring enclosing scopes. -/
+def Scope.findHere? (scope : Scope) (name : String) : Option Symbol :=
+  scope.current.find? name
+
 /--
 Adds a binding to the current scope, allowing it to shadow an enclosing binding.
 Returns a diagnostic at `symbol.span` if the current scope already declares `name`.

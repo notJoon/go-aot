@@ -18,7 +18,7 @@ def function (name : String) : String :=
 /--
 Whether `function` is the process entry point, which returns a zero exit status instead of `void`.
 
-Example: `isEntry ⟨"main", #[], .void, #[]⟩` is `true`, and `isEntry ⟨"f", #[], .void, #[]⟩` is `false`.
+Example: `isEntry ⟨"main", #[], #[], #[]⟩` is `true`, and `isEntry ⟨"f", #[], #[], #[]⟩` is `false`.
 -/
 def isEntry (function : IR.Function) : Bool :=
   function.name == "main"
@@ -27,10 +27,10 @@ def isEntry (function : IR.Function) : Bool :=
 Whether `function` returns nothing at the ABI level, which holds for every `void` Go function
 except the entry point.
 
-Example: `returnsVoid ⟨"f", #[], .void, #[]⟩` is `true`, and `returnsVoid ⟨"main", #[], .void, #[]⟩`
+Example: `returnsVoid ⟨"f", #[], #[], #[]⟩` is `true`, and `returnsVoid ⟨"main", #[], #[], #[]⟩`
 is `false`.
 -/
 def returnsVoid (function : IR.Function) : Bool :=
-  function.returnKind == .void && !isEntry function
+  function.results.isEmpty && !isEntry function
 
 end GoAot.Backend.Symbol

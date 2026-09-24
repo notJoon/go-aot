@@ -69,7 +69,7 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
       if functions.contains function.name then
         throw s!"duplicate function '{function.name}'"
       if function.name == "main" then
-        unless function.parameters.isEmpty && function.returnKind == .void do
+        unless function.parameters.isEmpty && function.results.isEmpty do
           throw "main must have no parameters or return value"
       let mut parameters : Std.HashSet String := {}
       for parameter in function.parameters do
@@ -137,20 +137,16 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
       throw s!"cannot convert {source.name} to {target.name}"
     verifyOperand function state.values source value
     defineValue state result target
-  | .call result name arguments =>
-    let some callee := functions[name]?
-      | throw s!"unknown function '{name}'"
-    let .value ty := callee.returnKind
-      | throw s!"function '{name}' does not return a value"
-    verifyArguments function state.values callee arguments
-    defineValue state result ty
-  | .callVoid name arguments =>
+  | .call results name arguments =>
     let some callee := functions[name]?
       | throw s!"unknown function '{name}'"
     if name == "main" then throw "cannot call 'main'"
-    if callee.returnKind != .void then
-      throw s!"function '{name}' does not return void"
+    if results.size != callee.results.size then
+      throw s!"call to '{name}' must define {callee.results.size} results"
     verifyArguments function state.values callee arguments
+    let mut state := state
+    for result in results, ty in callee.results do
+      state ← defineValue state result ty
     return state
   | .printString _ => return state
   | .print ty value =>
@@ -165,12 +161,11 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
     verifyOperand function values .bool condition
     verifyTarget function ifTrue
     verifyTarget function ifFalse
-  | .ret value =>
-    match function.returnKind, value with
-    | .void, none => pure ()
-    | .value ty, some value => verifyOperand function values ty value
-    | .void, some _ => throw "void function cannot return a value"
-    | .value ty, none => throw s!"{ty.name} function must return a value"
+  | .ret operands =>
+    if operands.size != function.results.size then
+      throw s!"return must have {function.results.size} operands"
+    for operand in operands, ty in function.results do
+      verifyOperand function values ty operand
 
 private def verifyBlock (functions : Std.HashMap String Function) (function : Function)
     (blockIndex : BlockId) (block : Block) (previous : BlockState) : Except VerifyError BlockState := do

@@ -63,11 +63,6 @@ inductive ShiftOp where
 
 abbrev BlockId := Nat
 
-inductive ReturnKind where
-  | void
-  | value (ty : Ty)
-  deriving BEq
-
 /--
 An operation within a basic block.
 
@@ -90,8 +85,8 @@ inductive Instruction where
   convert to integers toward zero, saturating at the range of `target.floatConversionTy` with NaN
   as 0, then truncate to `target`. -/
   | convert (result : ValueId) (source target : Ty) (value : Operand)
-  | call (result : ValueId) (name : String) (arguments : Array Operand)
-  | callVoid (name : String) (arguments : Array Operand)
+  /-- Calls `name`, defining one value per callee result. -/
+  | call (results : Array ValueId) (name : String) (arguments : Array Operand)
   -- Source escapes are decoded during checking so every backend receives identical bytes.
   | printString (bytes : ByteArray)
   | print (ty : Ty) (value : Operand)
@@ -99,7 +94,8 @@ inductive Instruction where
 inductive Terminator where
   | br (target : BlockId)
   | condBr (condition : Operand) (ifTrue ifFalse : BlockId)
-  | ret (value : Option Operand)
+  /-- Returns one operand per function result. -/
+  | ret (values : Array Operand)
 
 structure Block where
   instructions : Array Instruction
@@ -113,7 +109,8 @@ structure Parameter where
 structure Function where
   name : String
   parameters : Array Parameter
-  returnKind : ReturnKind
+  /-- Result types. A function without results returns nothing, and `main` has none. -/
+  results : Array Ty
   blocks : Array Block
 
 structure Program where

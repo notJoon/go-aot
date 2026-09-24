@@ -167,10 +167,10 @@ private def checkPanics : IO Unit := do
 
 private def checkDirectCFG : IO Unit := do
   let program : IR.Program := ⟨#[
-    ⟨"main", #[], .void, #[⟨#[.call 0 "walk" #[], .print .int (.value 0)], .ret none⟩]⟩,
-    ⟨"walk", #[], .value .int, #[
+    ⟨"main", #[], #[], #[⟨#[.call #[0] "walk" #[], .print .int (.value 0)], .ret #[]⟩]⟩,
+    ⟨"walk", #[], #[.int], #[
       ⟨#[], .br 2⟩,
-      ⟨#[.print .int (.literal 11)], .ret (some (.literal 7))⟩,
+      ⟨#[.print .int (.literal 11)], .ret #[(.literal 7)]⟩,
       ⟨#[.binary 0 .less .int (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
       ⟨#[], .br 3⟩]⟩]⟩
   let .ok () := IR.verify program | throw (IO.userError "valid cyclic CFG rejected")
@@ -256,6 +256,33 @@ def goldenMain : IO Unit := do
       ("package main\nfunc main() { println(0x1p-2) }\n",
         "2:23: hexadecimal floating-point literals are unsupported"),
       ("package main\nfunc f(s string) {}\nfunc main() {}\n", "2:10: unsupported type 'string'"),
+      ("package main\nfunc f() (x int) {}\nfunc main() {}\n", "2:13: named results are unsupported"),
+      ("package main\nfunc f() (int, int) { return 1 }\nfunc main() {}\n",
+        "2:23: not enough return values in function 'f'"),
+      ("package main\nfunc f() (int, int) { return 1, true }\nfunc main() {}\n",
+        "2:33: return value must be int"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { x := f() }\n",
+        "3:20: multiple-value f() in single-value context"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { println(f()) }\n",
+        "3:23: multiple-value f() in single-value context"),
+      ("package main\nfunc g() int { return 1 }\nfunc main() { a, b := g() }\n",
+        "3:23: assignment mismatch: 2 variables but g() returns 1 value"),
+      ("package main\nfunc main() { a, b := 1 }\n",
+        "2:23: assignment mismatch: 2 variables but 1 value"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { a, b := f(); a, b := f() }\n",
+        "3:28: no new variables on left side of :="),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { _, _ := f() }\n",
+        "3:15: no new variables on left side of :="),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { a, a := f() }\n",
+        "3:18: 'a' repeated on left side of :="),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { a, b = f() }\n",
+        "3:15: unknown identifier 'a'"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { var a bool; a, b := f() }\n",
+        "3:27: assignment type does not match variable type"),
+      ("package main\nfunc g() (int, int) { return 1, 2 }\nfunc f() (int, bool) { return g() }\nfunc main() {}\n",
+        "3:31: results of g() do not match the results of function 'f'"),
+      ("package main\nfunc main() (int, int) { return 1, 2 }\n",
+        "2:1: main must have no parameters or return value"),
       ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "2:23: return value must be int"),
       ("package main\nfunc f() int { return }\nfunc main() {}\n",
         "2:16: function 'f' must return a value"),

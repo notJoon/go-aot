@@ -37,10 +37,8 @@ generate host machine code, and link it. After the correctness and benchmark gat
 are complete, LLVM becomes the only backend and the C backend is removed.
 
 Values are `bool`, `int`, `int8` to `int64`, `uint`, `uint8` to `uint64`, and `float64`.
-`int` and `uint` are 64 bits wide. LLVM uses `i1`, the integer of each width, and `double`.
-C uses the matching `<stdint.h>` type and `double`, and an `int64_t` holding 0 or 1 for a
-bool, which is what a C comparison produces. The two backends never call each other, so their
-representations do not have to match.
+Functions can return several results. [docs/ABI.md](docs/ABI.md) records how each backend
+represents values, parameters, and results.
 
 Untyped constants are exact, as in Go, and take their type from the context or default to
 `int` or `float64`. A constant that overflows its type or truncates a fraction is a compile

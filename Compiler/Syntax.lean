@@ -58,8 +58,13 @@ inductive Stmt where
   | varDeclaration (name : Ident) (typeName : Option Ident) (initializer : Option Expr)
   /-- Assigns a value to an existing variable without introducing a binding. -/
   | assignment (name : Ident) (value : Expr)
+  /--
+  Binds the results of one call to two or more names, declaring with `:=` when `define` is set and
+  assigning with `=` otherwise. `_` discards a result.
+  -/
+  | multiAssignment (names : Array Ident) (define : Bool) (value : Expr)
   | expr (value : Expr)
-  | return (value : Option Expr) (span : Span)
+  | return (values : Array Expr) (span : Span)
   | ifThen (condition : Expr) (body : Array Stmt) (elseBody : Option (Array Stmt))
   | forLoop (initializer : Option Stmt) (condition : Option Expr) (post : Option Stmt)
       (body : Array Stmt)
@@ -75,7 +80,7 @@ structure Parameter where
 structure FunctionDecl where
   name : Ident
   parameters : Array Parameter
-  resultType : Option Ident
+  results : Array Ident
   body : Array Stmt
   span : Span
   deriving Repr, BEq

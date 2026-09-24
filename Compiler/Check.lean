@@ -17,7 +17,7 @@ private structure Signature where
   id : Checked.FunctionId
   name : String
   parameters : Array IR.Parameter
-  returnKind : IR.ReturnKind
+  results : Array Ty
   -- Retain parameter bindings for lookup and duplicate declarations in the body.
   scope : Scope
 
@@ -45,10 +45,8 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap Str
       scope ← scope.declare parameterName
         ⟨.parameter, parameters.size, ty, parameter.name.span⟩
       parameters := parameters.push ⟨parameterName, ty⟩
-    let returnKind ← match function.resultType with
-      | none => pure .void
-      | some resultType => IR.ReturnKind.value <$> resolveType resultType
-    result := result.insert name ⟨i, name, parameters, returnKind, scope⟩
+    let results ← function.results.mapM resolveType
+    result := result.insert name ⟨i, name, parameters, results, scope⟩
   return result
 
 private structure Context where
@@ -216,9 +214,10 @@ mutual
       -- A package level function would shadow a predeclared type of the same name.
       match (← read).all[name]?, Ty.ofName? name with
       | some signature, _ =>
-        let .value ty := signature.returnKind
-          | throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
-        return .typed (.call signature.id (← checkArguments signature arguments span)) ty
+        match signature.results with
+        | #[ty] => return .typed (.call signature.id (← checkArguments signature arguments span)) ty
+        | #[] => throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
+        | _ => throw (diagnosticAt callee.span s!"multiple-value {callee.text}() in single-value context")
       | none, some target => checkConversion target arguments span
       | none, none => throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
     | .binary op left right span => checkBinary hint op left right span
@@ -403,6 +402,52 @@ private def checkDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ide
   modify (·.push ty)
   return (.declare id value, { context with scope })
 
+/--
+Bind each result of a call to a name. `:=` declares names that are new in the current scope and
+assigns the others, and needs at least one new name, as in Go.
+-/
+private def checkMultiAssignment (names : Array Syntax.Ident) (define : Bool) (value : Syntax.Expr) :
+    CheckM (Checked.Stmt × Context) := do
+  let context ← read
+  let mismatch (values : String) :=
+    diagnosticAt value.span s!"assignment mismatch: {names.size} variables but {values}"
+  let .call callee arguments span := value | throw (mismatch "1 value")
+  let plural (count : Nat) := if count == 1 then "1 value" else s!"{count} values"
+  let name := callee.text.copy
+  if let .error error := checkCallable context.scope name callee.span then throw error
+  let some signature := context.all[name]?
+    | if (Ty.ofName? name).isSome then throw (mismatch "1 value")
+      else throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
+  unless signature.results.size == names.size do
+    throw (mismatch s!"{callee.text}() returns {plural signature.results.size}")
+  let arguments ← (checkArguments signature arguments span).run context
+  let mut scope := context.scope
+  let mut targets := #[]
+  let mut declared : Array String := #[]
+  for target in names, ty in signature.results do
+    let text := target.text.copy
+    if text == "_" then
+      targets := targets.push none
+      continue
+    if define && declared.contains text then
+      throw (diagnosticAt target.span s!"'{text}' repeated on left side of :=")
+    match if define then scope.findHere? text else scope.find? text with
+    | some symbol =>
+      unless symbol.ty == ty do
+        throw (diagnosticAt target.span "assignment type does not match variable type")
+      targets := targets.push (some symbol.id)
+    | none =>
+      unless define do throw (diagnosticAt target.span s!"unknown identifier '{text}'")
+      unless IR.validName text do throw (diagnosticAt target.span s!"unsupported local name '{text}'")
+      let id := (← get).size
+      scope ← scope.declare text ⟨.local, id, ty, target.span⟩
+      modify (·.push ty)
+      targets := targets.push (some id)
+      declared := declared.push text
+  if define && declared.isEmpty then
+    throw (diagnosticAt ((names[0]?.map (·.span)).getD value.span) "no new variables on left side of :=")
+  return (.callAssign targets signature.id arguments, { context with scope })
+
 private def checkCondition (condition : Syntax.Expr) (message : String) : CheckM Checked.Expr := do
   let (value, ty) ← (checkTyped Ty.bool condition).run (← read)
   unless ty == .bool do throw (diagnosticAt condition.span message)
@@ -419,14 +464,11 @@ mutual
       if let .error error := checkCallable context.scope name callee.span then throw error
       let some signature := context.all[name]?
         | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
-      -- Value-returning calls share the expression path's checks; the result is dropped.
-      if signature.returnKind != .void then
-        let (value, _) ← (checkTyped none (.call callee arguments span)).run context
-        return (.discard value, context)
       if signature.name == "main" then
         throw (diagnosticAt callee.span "cannot call 'main'")
       let checked ← (checkArguments signature arguments span).run context
-      return (.callVoid signature.id checked, context)
+      return (.call signature.id checked, context)
+    | .multiAssignment names define value => checkMultiAssignment names define value
     | .varDeclaration name typeName initializer => checkDeclaration name typeName initializer
     | .assignment name value => do
       let some symbol := context.scope.find? name.text.copy
@@ -436,19 +478,35 @@ mutual
         throw (diagnosticAt value.span "assignment type does not match variable type")
       return (.assign symbol.id value', context)
     | .expr value => throw (diagnosticAt value.span "only function calls may be used as statements")
-    | .return value span => do
+    | .return values span => do
       let signature := context.signature
-      match signature.returnKind, value with
-      | .void, none => return (.return none, context)
-      | .void, some value =>
-        throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      | .value _, none =>
+      let results := signature.results
+      -- `return f()` forwards every result of a call to a function with the same results.
+      if let #[.call callee arguments callSpan] := values then
+        let forwarded? := if results.size ≥ 2 then context.all[callee.text.copy]? else none
+        if let some forwarded := forwarded? then
+          if let .error error := checkCallable context.scope callee.text.copy callee.span then throw error
+          unless forwarded.results == results do
+            throw (diagnosticAt callee.span
+              s!"results of {callee.text}() do not match the results of function '{signature.name}'")
+          let checked ← (checkArguments forwarded arguments callSpan).run context
+          return (.returnCall forwarded.id checked, context)
+      if let some first := values[0]? then
+        if results.isEmpty then
+          throw (diagnosticAt first.span s!"function '{signature.name}' returns no value")
+      else if !results.isEmpty then
         throw (diagnosticAt span s!"function '{signature.name}' must return a value")
-      | .value expected, some value =>
+      if values.size < results.size then
+        throw (diagnosticAt span s!"not enough return values in function '{signature.name}'")
+      if let some extra := values[results.size]? then
+        throw (diagnosticAt extra.span s!"too many return values in function '{signature.name}'")
+      let mut checked := #[]
+      for value in values, expected in results do
         let (value', ty) ← (checkTyped expected value).run context
         unless ty == expected do
           throw (diagnosticAt value.span s!"return value must be {expected.name}")
-        return (.return (some value'), context)
+        checked := checked.push value'
+      return (.return checked, context)
     | .break span => do
       if context.loopDepth == 0 then throw (diagnosticAt span "break outside loop")
       return (.break, context)
@@ -495,7 +553,8 @@ private partial def hasOwnBreak (statements : Array Syntax.Stmt) : Bool :=
       hasOwnBreak yes || (elseBody.map hasOwnBreak).getD false
     -- A nested loop consumes its own break.
     | .forLoop .. => false
-    | .varDeclaration .. | .assignment .. | .expr _ | .return .. | .continue _ => false
+    | .varDeclaration .. | .assignment .. | .multiAssignment .. | .expr _ | .return .. | .continue _ =>
+      false
 
 -- Return rules describe source syntax, even when CFG edges later make a path unreachable.
 private partial def isTerminating (statements : Array Syntax.Stmt) : Bool :=
@@ -512,7 +571,7 @@ def check (file : Syntax.File) : Except Diagnostic Checked.File := do
   -- Collect every signature before checking bodies to allow forward calls and recursion.
   let all ← signatures file
   let some main := all["main"]? | throw ⟨.lowering, none, "expected main function"⟩
-  unless main.parameters.isEmpty && main.returnKind == .void do
+  unless main.parameters.isEmpty && main.results.isEmpty do
     throw ⟨.lowering, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
       "main must have no parameters or return value"⟩
   let mut functions := #[]
@@ -522,10 +581,10 @@ def check (file : Syntax.File) : Except Diagnostic Checked.File := do
     let initial := signature.parameters.map (·.ty)
     let (body, locals) ← ((checkStatements function.body).run
       ⟨all, signature, signature.scope, 0⟩).run initial
-    if signature.returnKind != .void && !isTerminating function.body then
+    if !signature.results.isEmpty && !isTerminating function.body then
       throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
     functions := functions.push ⟨signature.name, signature.parameters, locals,
-      signature.returnKind, body⟩
+      signature.results, body⟩
   return ⟨functions⟩
 
 end GoAot.Check

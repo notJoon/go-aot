@@ -61,7 +61,7 @@ private def typeOf : Checked.Expr → LowerM Ty
     let some ty := (← read).function.locals[id]? | throw lowerError
     return ty
   | .call id _ => do
-    let some { returnKind := .value ty, .. } := (← read).file.functions[id]? | throw lowerError
+    let some { results := #[ty], .. } := (← read).file.functions[id]? | throw lowerError
     return ty
   | .binary op ty _ _ => return if op.isComparison then .bool else ty
   | .shift _ ty .. | .convert _ ty _ => return ty
@@ -79,7 +79,7 @@ private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
   | .call id arguments => do
     let some function := (← read).file.functions[id]? | throw lowerError
     let lowered ← lowerOperands arguments
-    emitValue (.call · function.name lowered)
+    emitValue (.call #[·] function.name lowered)
   | .binary op ty left right => do
     let #[left, right] ← lowerOperands #[left, right] | throw lowerError
     emitValue (.binary · op ty left right)
@@ -130,11 +130,25 @@ mutual
       emit (.store id ty (← lowerExpr initializer))
     | .printString bytes => emit (.printString bytes)
     | .print ty value => emit (.print ty (← lowerExpr value))
-    | .callVoid id arguments =>
+    | .call id arguments =>
       let some function := (← read).file.functions[id]? | throw lowerError
-      emit (.callVoid function.name (← lowerExpr.lowerOperands arguments))
-    | .discard value => discard (lowerExpr value)
-    | .return value => terminate (.ret (← value.mapM lowerExpr))
+      let arguments ← lowerExpr.lowerOperands arguments
+      let results ← fun _ builder => pure (builder.freshValues function.results.size)
+      emit (.call results function.name arguments)
+    | .callAssign targets id arguments =>
+      let some function := (← read).file.functions[id]? | throw lowerError
+      let arguments ← lowerExpr.lowerOperands arguments
+      let results ← fun _ builder => pure (builder.freshValues function.results.size)
+      emit (.call results function.name arguments)
+      for target in targets, result in results, ty in function.results do
+        if let some slot := target then emit (.store slot ty (.value result))
+    | .return values => terminate (.ret (← lowerExpr.lowerOperands values))
+    | .returnCall id arguments =>
+      let some function := (← read).file.functions[id]? | throw lowerError
+      let arguments ← lowerExpr.lowerOperands arguments
+      let results ← fun _ builder => pure (builder.freshValues function.results.size)
+      emit (.call results function.name arguments)
+      terminate (.ret (results.map .value))
     | .break => jump (isBreak := true)
     | .continue => jump (isBreak := false)
     | .ifThen condition body elseBody =>
@@ -192,11 +206,9 @@ def lower (file : Checked.File) : Except Diagnostic IR.Program := do
     for h : index in [:function.parameters.size] do
       initial ← initial.emit (.store index function.parameters[index].ty (.argument index))
     let (_, builder) ← ((lowerStatements function.body).run ⟨file, function⟩).run initial
-    let builder ← match function.returnKind with
-      | .value _ => pure builder
-      | .void => builder.terminate (.ret none)
+    let builder ← if function.results.isEmpty then builder.terminate (.ret #[]) else pure builder
     let blocks ← builder.finish
-    functions := functions.push ⟨function.name, function.parameters, function.returnKind, blocks⟩
+    functions := functions.push ⟨function.name, function.parameters, function.results, blocks⟩
   return ⟨functions⟩
 
 end GoAot.Lowering

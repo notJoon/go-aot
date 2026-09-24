@@ -14,6 +14,13 @@ private def llvmType (ty : Ty) : String :=
   | .float => "double"
   | .signed | .unsigned => "i" ++ toString ty.bits
 
+/-- No results is `void`, one is its type, and several are an anonymous struct of their types. -/
+private def resultsType (types : Array Ty) : String :=
+  match types with
+  | #[] => "void"
+  | #[ty] => llvmType ty
+  | _ => "{ " ++ ", ".intercalate (types.map llvmType).toList ++ " }"
+
 private def divideMessage : String := "panic: runtime error: integer divide by zero\n"
 private def shiftMessage : String := "panic: runtime error: negative shift amount\n"
 
@@ -220,15 +227,20 @@ private def emitInstructions (functions : Std.HashMap String IR.Function)
     | .binary id op ty left right => output := emitBinary output id op ty left right
     | .shift id op ty value countTy count => output := emitShift output id op ty value countTy count
     | .convert id source target value => output := emitConvert output id source target value
-    | .call id name arguments =>
+    | .call results name arguments =>
       let callee := functions[name]?
-      let result := match callee.map (·.returnKind) with
-        | some (.value ty) => llvmType ty
-        | _ => "i64"
-      output := output ++ "  %v" ++ toString id ++ " = call " ++ result ++ " @" ++ Symbol.function name
+      let types := (callee.map (·.results)).getD #[]
+      let type := resultsType types
+      -- Several results arrive as one struct, taken apart with `extractvalue`.
+      let holder := s!"%results{results[0]?.getD 0}"
+      output := output ++ "  " ++ (match results with
+        | #[] => ""
+        | #[id] => s!"%v{id} = "
+        | _ => holder ++ " = ") ++ "call " ++ type ++ " @" ++ Symbol.function name
       output := emitArguments output callee arguments
-    | .callVoid name arguments =>
-      output := emitArguments (output ++ "  call void @" ++ Symbol.function name) functions[name]? arguments
+      if results.size ≥ 2 then
+        for h : index in [:results.size] do
+          output := output ++ s!"  %v{results[index]} = extractvalue {type} {holder}, {index}\n"
     | .printString bytes =>
       let index := stringIndices[bytes]!
       output := output ++ "  call void @goaot.print_line(ptr @.str." ++ toString index ++
@@ -237,21 +249,31 @@ private def emitInstructions (functions : Std.HashMap String IR.Function)
   return output
 
 private def resultType (function : IR.Function) : String :=
-  match function.returnKind with
-  | .value ty => llvmType ty
-  | .void => if Symbol.isEntry function then "i32" else "void"
+  if Symbol.isEntry function then "i32" else resultsType function.results
 
-private def emitTerminator (function : IR.Function) (output : String) : IR.Terminator → String
+private def emitTerminator (function : IR.Function) (blockIndex : Nat) (output : String) :
+    IR.Terminator → String
   | .br target => output ++ "  br label %bb" ++ toString target ++ "\n"
   | .condBr condition ifTrue ifFalse =>
     emitOperand (output ++ "  br i1 ") .bool condition ++ ", label %bb" ++ toString ifTrue ++
       ", label %bb" ++ toString ifFalse ++ "\n"
-  | .ret none =>
+  | .ret #[] =>
     if Symbol.returnsVoid function then output ++ "  ret void\n"
     else output ++ "  ret " ++ resultType function ++ " 0\n"
-  | .ret (some value) =>
-    let ty := match function.returnKind with | .value ty => ty | .void => .int
-    emitOperand (output ++ "  ret " ++ resultType function ++ " ") ty value ++ "\n"
+  | .ret #[value] =>
+    emitOperand (output ++ "  ret " ++ resultType function ++ " ") (function.results[0]?.getD .int) value ++ "\n"
+  | .ret values => Id.run do
+    -- Several results are packed into one struct with `insertvalue`.
+    let type := resultType function
+    let mut output := output
+    let mut previous := "poison"
+    for h : index in [:values.size] do
+      let ty := function.results[index]?.getD .int
+      let name := s!"%ret{blockIndex}.{index}"
+      output := emitOperand (output ++ s!"  {name} = insertvalue {type} {previous}, {llvmType ty} ") ty
+        values[index] ++ s!", {index}\n"
+      previous := name
+    return output ++ s!"  ret {type} {previous}\n"
 
 private def emitFunction (functions : Std.HashMap String IR.Function)
     (stringIndices : Std.HashMap ByteArray Nat) (output : String)
@@ -267,7 +289,7 @@ private def emitFunction (functions : Std.HashMap String IR.Function)
     if index != 0 then output := output ++ "\n"
     output := output ++ "bb" ++ toString index ++ ":\n"
     output := emitInstructions functions stringIndices index output block.instructions
-    output := emitTerminator function output block.terminator
+    output := emitTerminator function index output block.terminator
   return output ++ "}\n"
 
 private def lines (text : List String) : String :=

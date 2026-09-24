@@ -30,10 +30,13 @@ inductive Stmt where
   | assign (id : LocalId) (value : Expr)
   | printString (bytes : ByteArray)
   | print (ty : Ty) (value : Expr)
-  | callVoid (function : FunctionId) (arguments : Array Expr)
-  /-- Evaluates a value-returning call and drops its result. -/
-  | discard (value : Expr)
-  | return (value : Option Expr)
+  /-- Calls a function for its effects, dropping any results. -/
+  | call (function : FunctionId) (arguments : Array Expr)
+  /-- Stores each result of a call in its local, or drops the result for `none`. -/
+  | callAssign (targets : Array (Option LocalId)) (function : FunctionId) (arguments : Array Expr)
+  | return (values : Array Expr)
+  /-- Returns every result of a call, as `return f()` does for a function with several results. -/
+  | returnCall (function : FunctionId) (arguments : Array Expr)
   | ifThen (condition : Expr) (body : Array Stmt) (elseBody : Option (Array Stmt))
   | forLoop (initializer : Option Stmt) (condition : Option Expr) (post : Option Stmt)
       (body : Array Stmt)
@@ -45,7 +48,7 @@ structure Function where
   parameters : Array IR.Parameter
   /-- Slot types indexed by `LocalId`, including parameters and declarations in dead source. -/
   locals : Array Ty
-  returnKind : IR.ReturnKind
+  results : Array Ty
   body : Array Stmt
 
 structure File where
