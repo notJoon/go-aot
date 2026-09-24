@@ -156,8 +156,10 @@ mutual
       if let .error error := checkCallable context.scope name callee.span then throw error
       let some signature := context.all[name]?
         | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
-      unless signature.returnKind == .void do
-        throw (diagnosticAt callee.span s!"function '{callee.text}' result is unused")
+      -- Value-returning calls share the expression path's checks; the result is dropped.
+      if signature.returnKind == .int then
+        let (value, _) ← (checkOperand (.call callee arguments span)).run context
+        return (.discard value, context)
       if signature.name == "main" then
         throw (diagnosticAt callee.span "cannot call 'main'")
       unless arguments.size == signature.parameters.size do

@@ -2,6 +2,7 @@ module
 
 public import Compiler.IR
 import Compiler.Backend.Symbol
+import Std.Data.HashSet
 
 public section
 
@@ -29,11 +30,30 @@ private def emitBytes (output : String) (bytes : ByteArray) : String := Id.run d
     output := output.push (value % 16).digitChar.toUpper
   return output
 
+-- Values are used only in their defining block, so a block's operands decide which call
+-- results need a C variable. Discarded results would otherwise trigger -Wunused-variable.
+private def usedValues (block : IR.Block) : Std.HashSet IR.ValueId := Id.run do
+  let mut used := {}
+  let add (used : Std.HashSet IR.ValueId) : IR.Operand → Std.HashSet IR.ValueId
+    | .value id => used.insert id
+    | _ => used
+  for instruction in block.instructions do
+    used := match instruction with
+      | .store _ _ value | .printInt value => add used value
+      | .binary _ _ left right => add (add used left) right
+      | .call _ _ arguments | .callVoid _ arguments => arguments.foldl add used
+      | .alloca .. | .load .. | .printString _ => used
+  return match block.terminator with
+    | .condBr condition .. => add used condition
+    | .ret (some value) => add used value
+    | .br _ | .ret none => used
+
 -- Explicit byte counts preserve embedded NUL values during string output.
 private def emitInstructions (parameters : Array String)
-    (output : String) (instructions : Array IR.Instruction) : String := Id.run do
+    (output : String) (block : IR.Block) : String := Id.run do
+  let used := usedValues block
   let mut output := output
-  for instruction in instructions do
+  for instruction in block.instructions do
     match instruction with
     | .alloca .. => pure () -- Slot declarations are emitted outside the block braces.
     | .load id slot _ =>
@@ -45,7 +65,9 @@ private def emitInstructions (parameters : Array String)
       output := emitOperand parameters (output ++ "    int64_t tmp_" ++ toString id ++ " = ") left
       output := emitOperand parameters (output ++ " " ++ symbol ++ " ") right ++ ";\n"
     | .call id name arguments =>
-      output := output ++ "    int64_t tmp_" ++ toString id ++ " = " ++ Symbol.function name ++ "("
+      output := output ++ "    "
+      if used.contains id then output := output ++ "int64_t tmp_" ++ toString id ++ " = "
+      output := output ++ Symbol.function name ++ "("
       for h : index in [:arguments.size] do
         if index != 0 then output := output ++ ", "
         output := emitOperand parameters output arguments[index]
@@ -97,7 +119,7 @@ def emit (program : IR.Program) : String := Id.run do
     for h : index in [:function.blocks.size] do
       let block := function.blocks[index]
       output := output ++ "  bb" ++ toString index ++ ": {\n"
-      output := emitInstructions function.parameters output block.instructions
+      output := emitInstructions function.parameters output block
       output := emitTerminator function output block.terminator ++ "  }\n"
     output := output ++ "}\n"
   return output

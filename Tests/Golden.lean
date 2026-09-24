@@ -49,7 +49,8 @@ private def checkCompileGolden (name : String) : IO Unit := do
       let cPath := dir / "program.c"
       let exePath := dir / "program"
       IO.FS.writeFile cPath actual
-      discard <| IO.Process.run { cmd := ← ccCommand, args := #[cPath.toString, "-o", exePath.toString] }
+      discard <| IO.Process.run {
+        cmd := ← ccCommand, args := #["-Werror=unused-variable", cPath.toString, "-o", exePath.toString] }
       let output ← IO.Process.run { cmd := exePath.toString }
       check (output == expectedOutput) s!"wrong native output: {repr output}"
   | .error diagnostic =>
@@ -194,8 +195,14 @@ def goldenMain : IO Unit := do
   for (source, expected) in [
       ("package main\nfunc f() {}\nfunc main() { println(f()) }\n",
         "3:23: function 'f' does not return a value"),
-      ("package main\nfunc f() int { return 1 }\nfunc main() { f() }\n",
-        "3:15: function 'f' result is unused"),
+      ("package main\nfunc main() { 1 }\n", "2:15: only function calls may be used as statements"),
+      ("package main\nfunc f(n int) int { return n }\nfunc main() { f(1) + 1 }\n",
+        "3:15: only function calls may be used as statements"),
+      ("package main\nfunc f(n int) int { return n }\nfunc main() { f() }\n",
+        "3:15: function 'f' expects 1 arguments"),
+      ("package main\nfunc f(n int) int { return n }\nfunc main() { f(1 < 2) }\n",
+        "3:17: function arguments must be int"),
+      ("package main\nfunc main() { missing() }\n", "2:15: unknown function 'missing'"),
       ("package main\nfunc main() { main() }\n", "2:15: cannot call 'main'"),
       ("package main\nfunc main() { println(1 < 2) }\n", "2:23: println supports only string and int"),
       ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "2:23: return value must be int"),

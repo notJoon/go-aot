@@ -23,6 +23,8 @@ inductive Stmt where
   | printString (bytes : ByteArray)
   | printInt (value : Expr)
   | callVoid (function : FunctionId) (arguments : Array Expr)
+  /-- Evaluates a value-returning call and drops its result. -/
+  | discard (value : Expr)
   | return (value : Option Expr)
   | ifThen (condition : Expr) (body : Array Stmt) (elseBody : Option (Array Stmt))
   | forLoop (initializer : Option Stmt) (condition : Option Expr) (post : Option Stmt)
