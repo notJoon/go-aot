@@ -92,6 +92,8 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     ("x := 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
     ("x = 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
     ("println(1)", ",", " 2 }", "expected semicolon"),
+    ("println(1 ", "&", " 2) }", "bitwise operators are unsupported"),
+    ("println(1 ", "<<", " 2) }", "bitwise operators are unsupported"),
     ("x := ", "}", "", "expected expression"),
     ("", "f", "() = 1 }", "assignment target must be an identifier"),
     ("", "1", " = 2 }", "assignment target must be an identifier")].all

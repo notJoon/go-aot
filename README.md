@@ -41,6 +41,13 @@ as `i1`. C uses `int64_t` holding 0 or 1 for bool slots, temporaries, parameters
 results, which is what a C comparison produces. The two backends never call each other,
 so their representations do not have to match.
 
+Integer division and remainder follow Go. Dividing by a literal zero is a compile error.
+Dividing by zero at run time flushes stdout, writes
+`panic: runtime error: integer divide by zero` to stderr, and exits with status 2. Go also
+prints a goroutine trace, which this runtime does not have. The most negative value divided
+by -1 wraps to itself with remainder 0. `+`, `-`, and `*` wrap in LLVM, but signed overflow
+is undefined in the C backend, so tests that overflow run through LLVM only.
+
 The LLVM backend invokes `clang -O2 -x ir`; generated IR contains no hard-coded target
 triple or data layout. The temporary C backend uses the system `cc`.
 

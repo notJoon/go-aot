@@ -118,10 +118,11 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
     verifySlot state slot kind
     verifyOperand function state.values kind value
     return state
-  | .binary result op left right =>
-    verifyOperand function state.values .int left
-    verifyOperand function state.values .int right
-    defineValue state result (match op with | .less => .bool | _ => .int)
+  | .binary result op kind left right =>
+    if kind != .int && op != .equal && op != .notEqual then throw "expected int operator kind"
+    verifyOperand function state.values kind left
+    verifyOperand function state.values kind right
+    defineValue state result (if op.isComparison then .bool else kind)
   | .call result name arguments =>
     let some callee := functions[name]?
       | throw s!"unknown function '{name}'"

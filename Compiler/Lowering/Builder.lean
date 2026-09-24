@@ -29,6 +29,10 @@ private def builderError : Diagnostic :=
 def Builder.newBlock (builder : Builder) : IR.BlockId × Builder :=
   (builder.blocks.size, { builder with blocks := builder.blocks.push {} })
 
+/-- Allocate a compiler temporary slot after the checked locals. -/
+def Builder.newSlot (builder : Builder) (kind : IR.ValueKind) : IR.SlotId × Builder :=
+  (builder.slots.size, { builder with slots := builder.slots.push kind })
+
 def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
     Except Diagnostic Builder := do
   let some block := builder.blocks[target]? | throw builderError

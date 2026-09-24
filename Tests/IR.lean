@@ -45,7 +45,7 @@ example : Checked.File → Except Diagnostic IR.Program := Lowering.lower
 #check_failure fun (file : Syntax.File) => Backend.LLVM.emit file
 
 private def intValue : IR.Operand := .literal 1
-private def comparison : IR.Instruction := .binary 0 .less intValue intValue
+private def comparison : IR.Instruction := .binary 0 .less .int intValue intValue
 private def boolValue : IR.Operand := .value 0
 #check_failure (show IR.Block from { instructions := #[] })
 
@@ -94,7 +94,7 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
     (.callVoid "main" #[], "cannot call 'main'"),
     (.callVoid "f" #[intValue], "function 'f' does not return void"),
     (.call 0 "f" #[.argument 0], "argument index 0 is out of range"),
-    (.binary 0 .add intValue (.argument 0), "argument index 0 is out of range")].all
+    (.binary 0 .add .int intValue (.argument 0), "argument index 0 is out of range")].all
   fun (instruction, message) =>
     rejected ⟨#[{ mainFunction with blocks := #[⟨#[instruction], .ret none⟩] }, intFunction]⟩ message
 #guard rejected ⟨#[{ mainFunction with blocks :=
@@ -103,7 +103,7 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
 #guard rejected ⟨#[mainFunction, { intFunction with blocks :=
   #[⟨#[], .ret (some (.argument 1))⟩] }]⟩ "argument index 1 is out of range"
 #guard rejected ⟨#[{ mainFunction with blocks :=
-  #[⟨#[.binary 0 .less (.argument 0) intValue], .condBr boolValue 1 1⟩, ⟨#[], .ret none⟩] }]⟩
+  #[⟨#[.binary 0 .less .int (.argument 0) intValue], .condBr boolValue 1 1⟩, ⟨#[], .ret none⟩] }]⟩
   "argument index 0 is out of range"
 #guard rejected ⟨#[{ mainFunction with blocks :=
   #[⟨#[comparison], .condBr boolValue 1 0⟩, ⟨#[], .ret none⟩] }]⟩
@@ -127,13 +127,13 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
       "internal error: invalid IR in function 'main', block 0, terminator: branch to entry block is not allowed"
   | .ok _ => false
 
-private def definition : IR.Instruction := .binary 0 .add intValue intValue
+private def definition : IR.Instruction := .binary 0 .add .int intValue intValue
 
 #guard [(#[⟨#[.printInt (.value 42)], .ret none⟩],
       "value 42 is not defined earlier in this block", 0, some 0, false),
     (#[⟨#[.printInt (.value 0), definition], .ret none⟩],
       "value 0 is not defined earlier in this block", 0, some 0, false),
-    (#[⟨#[.binary 0 .add (.value 0) intValue], .ret none⟩],
+    (#[⟨#[.binary 0 .add .int (.value 0) intValue], .ret none⟩],
       "value 0 is not defined earlier in this block", 0, some 0, false),
     (#[⟨#[definition, definition], .ret none⟩],
       "value 0 is defined more than once", 0, some 1, false),
@@ -143,7 +143,7 @@ private def definition : IR.Instruction := .binary 0 .add intValue intValue
       "value 0 is not defined earlier in this block", 1, some 0, false),
     (#[⟨#[], .condBr intValue 1 1⟩, ⟨#[], .ret none⟩],
       "expected bool operand", 0, none, true),
-    (#[⟨#[comparison, .binary 1 .add boolValue intValue], .ret none⟩],
+    (#[⟨#[comparison, .binary 1 .add .int boolValue intValue], .ret none⟩],
       "expected int operand", 0, some 1, false),
     (#[⟨#[comparison, .call 1 "f" #[boolValue]], .ret none⟩],
       "expected int operand", 0, some 1, false),
@@ -160,8 +160,20 @@ private def definition : IR.Instruction := .binary 0 .add intValue intValue
     e.block? == some 0 && e.instruction? == none && e.terminator
   | .ok _ => false
 #guard accepted ⟨#[{ mainFunction with blocks :=
-  #[⟨#[.binary 100 .add intValue intValue, .binary 7 .subtract (.value 100) intValue,
+  #[⟨#[.binary 100 .add .int intValue intValue, .binary 7 .subtract .int (.value 100) intValue,
     .call 42 "f" #[.value 7], .printInt (.value 42)], .ret none⟩] }, intFunction]⟩
+
+-- Only equality accepts bool operands, and both operands must have the operator kind.
+#guard accepted ⟨#[{ mainFunction with blocks := #[
+  ⟨#[.binary 0 .notEqual .bool (.boolLiteral true) (.boolLiteral false)], .condBr (.value 0) 1 1⟩,
+  ⟨#[], .ret none⟩] }]⟩
+#guard [(IR.Instruction.binary 0 .add .bool (.boolLiteral true) (.boolLiteral true),
+      "expected int operator kind"),
+    (.binary 0 .less .bool (.boolLiteral true) (.boolLiteral true), "expected int operator kind"),
+    (.binary 0 .equal .bool (.boolLiteral true) intValue, "expected bool operand"),
+    (.binary 0 .equal .int intValue (.boolLiteral true), "expected int operand")].all
+  fun (instruction, message) =>
+    rejected ⟨#[{ mainFunction with blocks := #[⟨#[instruction], .ret none⟩] }]⟩ message
 
 -- Parameter and result kinds type arguments, call results, and returns.
 private def boolFunction : IR.Function :=
@@ -227,7 +239,7 @@ private def lowered (text : String) : Option IR.Program :=
   | some program => accepted program && match (program.functions[0]?.map (·.blocks) : Option (Array IR.Block)) with
     | some #[⟨#[.alloca 0 .int, .alloca 1 .int,
         .store 0 .int (.argument 0), .store 1 .int (.argument 1),
-        .load 0 1 .int, .load 1 0 .int, .binary 2 .subtract (.value 0) (.value 1)],
+        .load 0 1 .int, .load 1 0 .int, .binary 2 .subtract .int (.value 0) (.value 1)],
         .ret (some (.value 2))⟩] => true
     | _ => false
   | none => false

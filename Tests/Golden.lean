@@ -149,13 +149,26 @@ private def checkInvalidSSARejected : IO Unit := do
     }
     check (result.exitCode != 0) "LLVM verifier accepted invalid SSA"
 
+-- Go prints this line first, followed by a goroutine trace this runtime does not have.
+private def checkDividePanic : IO Unit := do
+  for op in ["/", "%"] do
+    let source := Source.ofString s!"package main\nfunc main() \{ println(1); z := 0; println(1 {op} z) }\n"
+    let .ok c := compileToC source | throw (IO.userError "C rejected a runtime zero divisor")
+    let .ok llvm := compileToLLVM source | throw (IO.userError "LLVM rejected a runtime zero divisor")
+    let outputs := #[← runGenerated (← ccCommand) "c" #["-std=c11", "-pedantic-errors"] c,
+      ← runGenerated (← clangCommand) "ir" llvmOptions llvm]
+    for output in outputs do
+      check (output.exitCode == 2 && output.stdout == "1\n" &&
+        output.stderr == "panic: runtime error: integer divide by zero\n")
+        s!"wrong divide by zero behavior for '{op}': {repr output.stdout} {repr output.stderr}"
+
 private def checkDirectCFG : IO Unit := do
   let program : IR.Program := ⟨#[
     ⟨"main", #[], .void, #[⟨#[.call 0 "walk" #[], .printInt (.value 0)], .ret none⟩]⟩,
     ⟨"walk", #[], .value .int, #[
       ⟨#[], .br 2⟩,
       ⟨#[.printInt (.literal 11)], .ret (some (.literal 7))⟩,
-      ⟨#[.binary 0 .less (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
+      ⟨#[.binary 0 .less .int (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
       ⟨#[], .br 3⟩]⟩]⟩
   let .ok () := IR.verify program | throw (IO.userError "valid cyclic CFG rejected")
   let c ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11", "-pedantic-errors"] (Backend.C.emit program)
@@ -189,6 +202,7 @@ def goldenMain : IO Unit := do
   checkDirectCFG
   checkNulString
   checkInvalidSSARejected
+  checkDividePanic
   checkSameRejection "package main\nfunc main() { println(missing()) }\n"
   checkSameRejection "package main\nfunc f(n int) int { return n }\nfunc main() { println(f()) }\n"
   checkSameRejection "package main\nfunc main() { println(9223372036854775808) }\n"
@@ -204,6 +218,15 @@ def goldenMain : IO Unit := do
         "3:17: function arguments must be int"),
       ("package main\nfunc main() { missing() }\n", "2:15: unknown function 'missing'"),
       ("package main\nfunc main() { println(1 + true) }\n", "2:27: binary operands must be int"),
+      ("package main\nfunc main() { println(1 / 0) }\n", "2:27: division by zero"),
+      ("package main\nfunc main() { println(1 % 0x0) }\n", "2:27: division by zero"),
+      ("package main\nfunc main() { println(1 == true) }\n",
+        "2:28: comparison operands must have the same type"),
+      ("package main\nfunc main() { if 1 && true {} }\n", "2:18: logical operands must be bool"),
+      ("package main\nfunc main() { if true || 1 {} }\n", "2:26: logical operands must be bool"),
+      ("package main\nfunc main() { println(-true) }\n", "2:24: operand of '-' must be int"),
+      ("package main\nfunc main() { if !1 {} }\n", "2:19: operand of '!' must be bool"),
+      ("package main\nfunc main() { println(true < false) }\n", "2:23: binary operands must be int"),
       ("package main\nfunc main() { println(true + 1) }\n", "2:23: binary operands must be int"),
       ("package main\nfunc f(b bool) bool { return b }\nfunc main() { f(1) }\n",
         "3:17: function arguments must be bool"),

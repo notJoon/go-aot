@@ -15,7 +15,13 @@ structure Ident where
   deriving Repr, BEq
 
 inductive BinaryOp where
-  | add | subtract | less
+  | add | subtract | multiply | divide | remainder
+  | equal | notEqual | less | lessEqual | greater | greaterEqual
+  | and | or
+  deriving Repr, BEq
+
+inductive UnaryOp where
+  | negate | not
   deriving Repr, BEq
 
 inductive Expr where
@@ -24,10 +30,12 @@ inductive Expr where
   | identifier (name : Ident)
   | call (callee : Ident) (arguments : Array Expr) (span : Span)
   | binary (op : BinaryOp) (left right : Expr) (span : Span)
+  | unary (op : UnaryOp) (operand : Expr) (span : Span)
   deriving Repr, BEq
 
 def Expr.span : Expr → Span
-  | .stringLiteral _ span | .intLiteral _ span | .call _ _ span | .binary _ _ _ span => span
+  | .stringLiteral _ span | .intLiteral _ span | .call _ _ span | .binary _ _ _ span
+  | .unary _ _ span => span
   | .identifier name => name.span
 
 inductive Stmt where

@@ -95,41 +95,63 @@ private def rejectMultiple : P Unit := do
   if ← peekSymbol "," then
     Parser.fail "multiple variable declarations and assignments are unsupported"
 
+private def binaryOperator? : P (Option (String × Syntax.BinaryOp × Nat)) := do
+  let some { kind := .symbol text, .. } ← Parser.peek? | return none
+  let op? : Option (Syntax.BinaryOp × Nat) := match text with
+    | "||" => some (.or, 1)
+    | "&&" => some (.and, 2)
+    | "==" => some (.equal, 3)
+    | "!=" => some (.notEqual, 3)
+    | "<" => some (.less, 3)
+    | "<=" => some (.lessEqual, 3)
+    | ">" => some (.greater, 3)
+    | ">=" => some (.greaterEqual, 3)
+    | "+" => some (.add, 4)
+    | "-" => some (.subtract, 4)
+    | "*" => some (.multiply, 5)
+    | "/" => some (.divide, 5)
+    | "%" => some (.remainder, 5)
+    | _ => none
+  if op?.isNone && ["|", "^", "<<", ">>", "&", "&^"].contains text then
+    Parser.fail "bitwise operators are unsupported"
+  return op?.map fun (op, precedence) => (text, op, precedence)
+
 private def rejectLabel (keyword : String) : P Unit := do
   if let some { kind := .identifier, .. } ← Parser.peek? then
     Parser.fail s!"labeled {keyword} is unsupported"
 
 mutual
   private partial def expression (source : Source) : P Syntax.Expr :=
-    comparison source
+    binaryExpression source 1
 
-  private partial def comparison (source : Source) : P Syntax.Expr := do
-    let left ← additive source
-    if ← peekSymbol "<" then
-      let _ ← symbol "<"
-      let right ← additive source
-      return .binary .less left right ⟨left.span.start, right.span.stop⟩
+  -- Precedence climbing over the Go spec levels. Every binary operator is left associative.
+  private partial def binaryExpression (source : Source) (minimum : Nat) : P Syntax.Expr := do
+    let mut left ← unaryExpression source
+    repeat
+      let some (text, op, precedence) ← binaryOperator? | break
+      if precedence < minimum then break
+      let _ ← symbol text
+      let right ← binaryExpression source (precedence + 1)
+      left := .binary op left right ⟨left.span.start, right.span.stop⟩
     return left
 
-  private partial def additive (source : Source) : P Syntax.Expr := do
-    additiveRest source (← primary source)
-
-  private partial def additiveRest (source : Source) (left : Syntax.Expr) : P Syntax.Expr := do
-    let op? ← if ← peekSymbol "+" then
-        let _ ← symbol "+"
-        pure (some Syntax.BinaryOp.add)
-      else if ← peekSymbol "-" then
-        let _ ← symbol "-"
-        pure (some Syntax.BinaryOp.subtract)
-      else pure none
-    match op? with
-    | none => return left
-    | some op =>
-      let right ← primary source
-      additiveRest source (.binary op left right ⟨left.span.start, right.span.stop⟩)
+  private partial def unaryExpression (source : Source) : P Syntax.Expr := do
+    let op? := match ← Parser.peek? with
+      | some { kind := .symbol "-", .. } => some ("-", Syntax.UnaryOp.negate)
+      | some { kind := .symbol "!", .. } => some ("!", .not)
+      | _ => none
+    let some (text, op) := op? | primary source
+    let token ← symbol text
+    let operand ← unaryExpression source
+    return .unary op operand ⟨token.span.start, operand.span.stop⟩
 
   private partial def primary (source : Source) : P Syntax.Expr := do
     match ← Parser.peek? with
+    | some { kind := .symbol "(", .. } =>
+      let _ ← symbol "("
+      let value ← expression source
+      let _ ← symbol ")"
+      return value
     | some { kind := .stringLiteral, .. } => stringLiteral source
     | some { kind := .intLiteral, .. } => intLiteral source
     | some { kind := .identifier, .. } =>

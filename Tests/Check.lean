@@ -11,7 +11,7 @@ private def checked (text : String) : Option Checked.File :=
     | some function => function.name == "f" && function.locals == #[.int, .int, .int] &&
       match function.body with
       | #[Checked.Stmt.declare 1 (.local 0),
-          .ifThen (.binary .less (.local 0) (.intLiteral 1))
+          .ifThen (.binary .less .int (.local 0) (.intLiteral 1))
             #[.declare 2 (.local 1), .return (some (.local 2))] none,
           .return (some (.local 1))] => true
       | _ => false

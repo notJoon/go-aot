@@ -101,14 +101,40 @@ private partial def checkOperand :
     let (left', leftKind) ← checkOperand left
     let (right', rightKind) ← checkOperand right
     -- Point at the operand whose type is wrong rather than the whole expression.
-    unless leftKind == .int do throw (diagnosticAt left.span "binary operands must be int")
-    unless rightKind == .int do throw (diagnosticAt right.span "binary operands must be int")
-    let (left, right) := (left', right')
-    let (op, kind) : IR.Op × IR.ValueKind := match op with
-      | .add => (.add, .int)
-      | .subtract => (.subtract, .int)
-      | .less => (.less, .bool)
-    return (.binary op left right, kind)
+    let expect (operand : Syntax.Expr) (actual expected : IR.ValueKind) (message : String) :
+        ReaderT Context (Except Diagnostic) Unit := do
+      unless actual == expected do throw (diagnosticAt operand.span message)
+    let irOp : IR.Op ← match op with
+      | .and | .or =>
+        expect left leftKind .bool "logical operands must be bool"
+        expect right rightKind .bool "logical operands must be bool"
+        return (if op == .and then .and left' right' else .or left' right', .bool)
+      | .equal | .notEqual =>
+        expect right rightKind leftKind "comparison operands must have the same type"
+        return (.binary (if op == .equal then .equal else .notEqual) leftKind left' right', .bool)
+      | .add => pure .add
+      | .subtract => pure .subtract
+      | .multiply => pure .multiply
+      | .divide => pure .divide
+      | .remainder => pure .remainder
+      | .less => pure .less
+      | .lessEqual => pure .lessEqual
+      | .greater => pure .greater
+      | .greaterEqual => pure .greaterEqual
+    expect left leftKind .int "binary operands must be int"
+    expect right rightKind .int "binary operands must be int"
+    if (irOp == .divide || irOp == .remainder) && right' matches .intLiteral 0 then
+      throw (diagnosticAt right.span "division by zero")
+    return (.binary irOp .int left' right', if irOp.isComparison then .bool else .int)
+  -- Unary operators desugar to binary IR: `-x` is `0 - x` and `!x` is `x == false`.
+  | .unary .negate operand _ => do
+    let (value, kind) ← checkOperand operand
+    unless kind == .int do throw (diagnosticAt operand.span "operand of '-' must be int")
+    return (.binary .subtract .int (.intLiteral 0) value, .int)
+  | .unary .not operand _ => do
+    let (value, kind) ← checkOperand operand
+    unless kind == .bool do throw (diagnosticAt operand.span "operand of '!' must be bool")
+    return (.binary .equal .bool value (.boolLiteral false), .bool)
   | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
 where
   checkArguments (signature : Signature) (arguments : Array Syntax.Expr) (span : Span) :

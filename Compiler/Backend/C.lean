@@ -41,7 +41,7 @@ private def usedValues (block : IR.Block) : Std.HashSet IR.ValueId := Id.run do
   for instruction in block.instructions do
     used := match instruction with
       | .store _ _ value | .printInt value => add used value
-      | .binary _ _ left right => add (add used left) right
+      | .binary _ _ _ left right => add (add used left) right
       | .call _ _ arguments | .callVoid _ arguments => arguments.foldl add used
       | .alloca .. | .load .. | .printString _ => used
   return match block.terminator with
@@ -61,10 +61,20 @@ private def emitInstructions (parameters : Array String)
       output := output ++ s!"    int64_t tmp_{id} = slot_{slot};\n"
     | .store slot _ value =>
       output := emitOperand parameters (output ++ s!"    slot_{slot} = ") value ++ ";\n"
-    | .binary id op left right =>
-      let symbol := match op with | .add => "+" | .subtract => "-" | .less => "<"
-      output := emitOperand parameters (output ++ "    int64_t tmp_" ++ toString id ++ " = ") left
-      output := emitOperand parameters (output ++ " " ++ symbol ++ " ") right ++ ";\n"
+    | .binary id op _ left right =>
+      output := output ++ "    int64_t tmp_" ++ toString id ++ " = "
+      let helper? := match op with
+        | .divide => some "goaot_div" | .remainder => some "goaot_rem" | _ => none
+      if let some helper := helper? then
+        output := emitOperand parameters (output ++ helper ++ "(") left
+        output := emitOperand parameters (output ++ ", ") right ++ ");\n"
+      else
+        let symbol := match op with
+          | .add => "+" | .subtract => "-" | .multiply => "*" | .equal => "==" | .notEqual => "!="
+          | .less => "<" | .lessEqual => "<=" | .greater => ">" | .greaterEqual => ">="
+          | .divide => "/" | .remainder => "%"
+        output := emitOperand parameters output left
+        output := emitOperand parameters (output ++ " " ++ symbol ++ " ") right ++ ";\n"
     | .call id name arguments =>
       output := output ++ "    "
       if used.contains id then output := output ++ "int64_t tmp_" ++ toString id ++ " = "
@@ -104,6 +114,21 @@ private def emitHeader (output : String) (function : IR.Function) : String :=
 
 def emit (program : IR.Program) : String := Id.run do
   let mut output := "#include <stdint.h>\n#include <stdio.h>"
+  let needsDivide := program.functions.any fun function => function.blocks.any fun block =>
+    block.instructions.any fun instruction =>
+      instruction matches .binary _ .divide .. || instruction matches .binary _ .remainder ..
+  if needsDivide then output := output ++ "\n#include <stdlib.h>\n\n" ++
+    "static void goaot_panic_divide(void) {\n" ++
+    "  fflush(stdout);\n" ++
+    "  fputs(\"panic: runtime error: integer divide by zero\\n\", stderr);\n" ++
+    "  exit(2);\n}\n\n" ++
+    -- C leaves the most negative value divided by -1 undefined, while Go wraps it.
+    "static int64_t goaot_div(int64_t a, int64_t b) {\n" ++
+    "  if (b == 0) goaot_panic_divide();\n" ++
+    "  return b == -1 ? (int64_t)(0 - (uint64_t)a) : a / b;\n}\n\n" ++
+    "static int64_t goaot_rem(int64_t a, int64_t b) {\n" ++
+    "  if (b == 0) goaot_panic_divide();\n" ++
+    "  return b == -1 ? 0 : a % b;\n}"
   let mut hasPrototype := false
   for function in program.functions do
     if !Symbol.isEntry function then

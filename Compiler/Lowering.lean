@@ -60,10 +60,26 @@ private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
     for argument in arguments do
       lowered := lowered.push (← lowerExpr argument)
     emitValue (.call · function.name lowered)
-  | .binary op left right => do
+  | .binary op kind left right => do
     let left ← lowerExpr left
     let right ← lowerExpr right
-    emitValue (.binary · op left right)
+    emitValue (.binary · op kind left right)
+  | .and left right => shortCircuit true left right
+  | .or left right => shortCircuit false left right
+where
+  -- Values cannot cross blocks, so both paths store the result in a temporary slot.
+  shortCircuit (isAnd : Bool) (left right : Checked.Expr) : LowerM IR.Operand := do
+    let slot ← fun _ builder => pure (builder.newSlot .bool)
+    let leftValue ← lowerExpr left
+    emit (.store slot .bool leftValue)
+    let rightBlock ← newBlock
+    let done ← newBlock
+    terminate (if isAnd then .condBr leftValue rightBlock done else .condBr leftValue done rightBlock)
+    selectBlock rightBlock
+    emit (.store slot .bool (← lowerExpr right))
+    terminate (.br done)
+    selectBlock done
+    emitValue (.load · slot .bool)
 
 mutual
   private partial def lowerStatement (statement : Checked.Stmt) : LowerM Unit := do

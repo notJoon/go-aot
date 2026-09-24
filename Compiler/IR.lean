@@ -31,7 +31,22 @@ def ValueKind.name : ValueKind → String
 inductive Op where
   | add
   | subtract
+  | multiply
+  /-- Go division: panics on a zero divisor and wraps the most negative value divided by -1. -/
+  | divide
+  /-- Go remainder, with the sign of the dividend and the same zero and -1 rules as `divide`. -/
+  | remainder
+  | equal
+  | notEqual
   | less
+  | lessEqual
+  | greater
+  | greaterEqual
+  deriving BEq
+
+def Op.isComparison : Op → Bool
+  | .equal | .notEqual | .less | .lessEqual | .greater | .greaterEqual => true
+  | _ => false
 
 abbrev BlockId := Nat
 
@@ -53,7 +68,8 @@ inductive Instruction where
   | load (result : ValueId) (slot : SlotId) (kind : ValueKind)
   /-- Writes a value to a declared slot. Both `kind` and the operand must match its declared kind. -/
   | store (slot : SlotId) (kind : ValueKind) (value : Operand)
-  | binary (result : ValueId) (op : Op) (left right : Operand)
+  /-- Both operands have kind `kind`. Only `equal` and `notEqual` accept bool operands. -/
+  | binary (result : ValueId) (op : Op) (kind : ValueKind) (left right : Operand)
   | call (result : ValueId) (name : String) (arguments : Array Operand)
   | callVoid (name : String) (arguments : Array Operand)
   -- Source escapes are decoded during checking so every backend receives identical bytes.

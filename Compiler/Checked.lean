@@ -16,7 +16,11 @@ inductive Expr where
   | boolLiteral (value : Bool)
   | local (id : LocalId)
   | call (function : FunctionId) (arguments : Array Expr)
-  | binary (op : IR.Op) (left right : Expr)
+  | binary (op : IR.Op) (kind : IR.ValueKind) (left right : Expr)
+  /-- Short circuit conjunction. `right` runs only when `left` is true. -/
+  | and (left right : Expr)
+  /-- Short circuit disjunction. `right` runs only when `left` is false. -/
+  | or (left right : Expr)
 
 inductive Stmt where
   | declare (id : LocalId) (initializer : Expr)
