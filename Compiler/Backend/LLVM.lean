@@ -37,22 +37,37 @@ private def emitBytes (output : String) (bytes : ByteArray) : String := Id.run d
       output := output.push (value % 16).digitChar.toUpper
   return output
 
+private def llvmType : IR.ValueKind → String
+  | .int => "i64"
+  | .bool => "i1"
+
 private def emitOperand (output : String) : IR.Operand → String
   | .value id => output ++ "%v" ++ toString id
   | .literal value => output ++ toString value
+  | .boolLiteral value => output ++ (if value then "true" else "false")
   | .argument index => output ++ "%arg" ++ toString index
 
-private def emitInstructions (stringIndices : Std.HashMap ByteArray Nat)
+private def emitArguments (output : String) (callee : Option IR.Function)
+    (arguments : Array IR.Operand) : String := Id.run do
+  let kinds := (callee.map (·.parameters.map (·.kind))).getD #[]
+  let mut output := output ++ "("
+  for h : index in [:arguments.size] do
+    if index != 0 then output := output ++ ", "
+    output := emitOperand (output ++ llvmType (kinds[index]?.getD .int) ++ " ") arguments[index]
+  return output ++ ")\n"
+
+private def emitInstructions (functions : Std.HashMap String IR.Function)
+    (stringIndices : Std.HashMap ByteArray Nat)
     (output : String) (instructions : Array IR.Instruction) : String := Id.run do
   let mut output := output
   for instruction in instructions do
     match instruction with
     | .alloca slot kind =>
-      output := output ++ s!"  %slot{slot} = alloca {if kind == .int then "i64" else "i1"}\n"
+      output := output ++ s!"  %slot{slot} = alloca {llvmType kind}\n"
     | .load id slot kind =>
-      output := output ++ s!"  %v{id} = load {if kind == .int then "i64" else "i1"}, ptr %slot{slot}\n"
+      output := output ++ s!"  %v{id} = load {llvmType kind}, ptr %slot{slot}\n"
     | .store slot kind value =>
-      output := emitOperand (output ++ s!"  store {if kind == .int then "i64" else "i1"} ") value ++
+      output := emitOperand (output ++ s!"  store {llvmType kind} ") value ++
         s!", ptr %slot{slot}\n"
     | .binary id op left right =>
       let operation := match op with
@@ -60,17 +75,14 @@ private def emitInstructions (stringIndices : Std.HashMap ByteArray Nat)
       output := emitOperand (output ++ "  %v" ++ toString id ++ " = " ++ operation ++ " ") left
       output := emitOperand (output ++ ", ") right ++ "\n"
     | .call id name arguments =>
-      output := output ++ "  %v" ++ toString id ++ " = call i64 @" ++ Symbol.function name ++ "("
-      for h : index in [:arguments.size] do
-        if index != 0 then output := output ++ ", "
-        output := emitOperand (output ++ "i64 ") arguments[index]
-      output := output ++ ")\n"
+      let callee := functions[name]?
+      let result := match callee.map (·.returnKind) with
+        | some (.value kind) => llvmType kind
+        | _ => "i64"
+      output := output ++ "  %v" ++ toString id ++ " = call " ++ result ++ " @" ++ Symbol.function name
+      output := emitArguments output callee arguments
     | .callVoid name arguments =>
-      output := output ++ "  call void @" ++ Symbol.function name ++ "("
-      for h : index in [:arguments.size] do
-        if index != 0 then output := output ++ ", "
-        output := emitOperand (output ++ "i64 ") arguments[index]
-      output := output ++ ")\n"
+      output := emitArguments (output ++ "  call void @" ++ Symbol.function name) functions[name]? arguments
     | .printString bytes =>
       let index := stringIndices[bytes]!
       output := output ++ "  call void @goaot.print_line(ptr @.str." ++ toString index ++
@@ -81,7 +93,7 @@ private def emitInstructions (stringIndices : Std.HashMap ByteArray Nat)
 
 private def resultType (function : IR.Function) : String :=
   match function.returnKind with
-  | .int => "i64"
+  | .value kind => llvmType kind
   | .void => if Symbol.isEntry function then "i32" else "void"
 
 private def emitTerminator (function : IR.Function) (output : String) : IR.Terminator → String
@@ -94,24 +106,27 @@ private def emitTerminator (function : IR.Function) (output : String) : IR.Termi
     else output ++ "  ret " ++ resultType function ++ " 0\n"
   | .ret (some value) => emitOperand (output ++ "  ret " ++ resultType function ++ " ") value ++ "\n"
 
-private def emitFunction (stringIndices : Std.HashMap ByteArray Nat) (output : String)
+private def emitFunction (functions : Std.HashMap String IR.Function)
+    (stringIndices : Std.HashMap ByteArray Nat) (output : String)
     (function : IR.Function) : String := Id.run do
   let linkage := if Symbol.isEntry function then "" else "internal "
   let mut output := output ++ "define " ++ linkage ++ resultType function ++ " @" ++ Symbol.function function.name ++ "("
-  for index in [:function.parameters.size] do
+  for h : index in [:function.parameters.size] do
     if index != 0 then output := output ++ ", "
-    output := output ++ "i64 %arg" ++ toString index
+    output := output ++ llvmType function.parameters[index].kind ++ " %arg" ++ toString index
   output := output ++ ") {\n"
   for h : index in [:function.blocks.size] do
     let block := function.blocks[index]
     if index != 0 then output := output ++ "\n"
     output := output ++ "bb" ++ toString index ++ ":\n"
-    output := emitInstructions stringIndices output block.instructions
+    output := emitInstructions functions stringIndices output block.instructions
     output := emitTerminator function output block.terminator
   return output ++ "}\n"
 
 def emit (program : IR.Program) : String := Id.run do
   let (strings, stringIndices, needsIntFormat) := collectRuntimeNeeds program
+  -- Verified IR names every callee, so call sites can take their types from its signature.
+  let functions := program.functions.foldl (fun map function => map.insert function.name function) {}
 
   let mut output := ""
   for h : i in [:strings.size] do
@@ -141,7 +156,7 @@ def emit (program : IR.Program) : String := Id.run do
     "exit:\n  call i64 @write(i32 1, ptr %newline, i64 1)\n  ret void\n}\n\n"
   for h : index in [:program.functions.size] do
     if index != 0 then output := output ++ "\n"
-    output := emitFunction stringIndices output program.functions[index]
+    output := emitFunction functions stringIndices output program.functions[index]
   return output
 
 end GoAot.Backend.LLVM

@@ -14,6 +14,7 @@ abbrev SlotId := Nat
 inductive Operand where
   | value (id : ValueId)
   | literal (value : Nat)
+  | boolLiteral (value : Bool)
   | argument (index : Nat)
   deriving BEq
 
@@ -21,6 +22,11 @@ inductive ValueKind where
   | int
   | bool
   deriving BEq
+
+/-- The Go spelling of a value kind, used in diagnostics. -/
+def ValueKind.name : ValueKind → String
+  | .int => "int"
+  | .bool => "bool"
 
 inductive Op where
   | add
@@ -31,7 +37,7 @@ abbrev BlockId := Nat
 
 inductive ReturnKind where
   | void
-  | int
+  | value (kind : ValueKind)
   deriving BEq
 
 /--
@@ -63,10 +69,14 @@ structure Block where
   instructions : Array Instruction
   terminator : Terminator
 
+structure Parameter where
+  -- Display name only. Argument operands use indices, and lowering copies parameters into slots.
+  name : String
+  kind : ValueKind
+
 structure Function where
   name : String
-  -- Display names only. Argument operands use indices, and lowering copies parameters into slots.
-  parameters : Array String
+  parameters : Array Parameter
   returnKind : ReturnKind
   blocks : Array Block
 

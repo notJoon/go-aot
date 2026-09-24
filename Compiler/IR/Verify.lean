@@ -36,12 +36,12 @@ def VerifyError.render (error : VerifyError) : String := Id.run do
       if value > maxSignedInt64 then
         throw "integer literal exceeds signed 64-bit range"
       pure .int
+    | .boolLiteral _ => pure .bool
     | .argument index => do
-      if index >= function.parameters.size then
-        throw s!"argument index {index} is out of range"
-      pure .int
-  if kind != expected then
-    throw (if expected == .int then "expected int operand" else "expected bool operand")
+      let some parameter := function.parameters[index]?
+        | throw s!"argument index {index} is out of range"
+      pure parameter.kind
+  if kind != expected then throw s!"expected {expected.name} operand"
 
 @[inline] private def verifyTarget (function : Function) (target : BlockId) : Except String Unit := do
   if target >= function.blocks.size then
@@ -69,6 +69,7 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
           throw "main must have no parameters or return value"
       let mut parameters : Std.HashSet String := {}
       for parameter in function.parameters do
+        let parameter := parameter.name
         unless validName parameter do
           throw s!"unsupported parameter name '{parameter}'"
         if parameters.contains parameter then
@@ -95,6 +96,13 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
     | throw s!"slot {slot} is not declared earlier in the entry block"
   if kind != declaredKind then throw s!"slot {slot} type mismatch"
 
+@[inline] private def verifyArguments (function : Function) (values : Std.HashMap ValueId ValueKind)
+    (callee : Function) (arguments : Array Operand) : Except String Unit := do
+  if arguments.size != callee.parameters.size then
+    throw s!"function '{callee.name}' expects {callee.parameters.size} arguments"
+  for argument in arguments, parameter in callee.parameters do
+    verifyOperand function values parameter.kind argument
+
 @[inline] private def verifyInstruction (functions : Std.HashMap String Function)
     (function : Function) (blockIndex : BlockId) (state : BlockState)
     (instruction : Instruction) : Except String BlockState := do
@@ -117,21 +125,17 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
   | .call result name arguments =>
     let some callee := functions[name]?
       | throw s!"unknown function '{name}'"
-    if callee.returnKind != .int then
-      throw s!"function '{name}' does not return int"
-    if arguments.size != callee.parameters.size then
-      throw s!"function '{name}' expects {callee.parameters.size} arguments"
-    for argument in arguments do verifyOperand function state.values .int argument
-    defineValue state result .int
+    let .value kind := callee.returnKind
+      | throw s!"function '{name}' does not return a value"
+    verifyArguments function state.values callee arguments
+    defineValue state result kind
   | .callVoid name arguments =>
     let some callee := functions[name]?
       | throw s!"unknown function '{name}'"
     if name == "main" then throw "cannot call 'main'"
     if callee.returnKind != .void then
       throw s!"function '{name}' does not return void"
-    if arguments.size != callee.parameters.size then
-      throw s!"function '{name}' expects {callee.parameters.size} arguments"
-    for argument in arguments do verifyOperand function state.values .int argument
+    verifyArguments function state.values callee arguments
     return state
   | .printString _ => return state
   | .printInt value =>
@@ -149,9 +153,9 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
   | .ret value =>
     match function.returnKind, value with
     | .void, none => pure ()
-    | .int, some value => verifyOperand function values .int value
+    | .value kind, some value => verifyOperand function values kind value
     | .void, some _ => throw "void function cannot return a value"
-    | .int, none => throw "int function must return a value"
+    | .value kind, none => throw s!"{kind.name} function must return a value"
 
 private def verifyBlock (functions : Std.HashMap String Function) (function : Function)
     (blockIndex : BlockId) (block : Block) (previous : BlockState) : Except VerifyError BlockState := do

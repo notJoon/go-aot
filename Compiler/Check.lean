@@ -16,10 +16,16 @@ private def diagnosticAt (span : Span) (message : String) : Diagnostic :=
 private structure Signature where
   id : Checked.FunctionId
   name : String
-  parameters : Array String
+  parameters : Array IR.Parameter
   returnKind : IR.ReturnKind
   -- Retain parameter bindings for lookup and duplicate declarations in the body.
   scope : Scope
+
+-- Type names are compared by spelling, so they cannot be shadowed yet.
+private def valueKind? (typeName : Syntax.Ident) : Option IR.ValueKind :=
+  if typeName.text == "int" then some .int
+  else if typeName.text == "bool" then some .bool
+  else none
 
 private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap String Signature) := do
   let mut result : Std.HashMap String Signature := {}
@@ -32,19 +38,22 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap Str
     let mut parameters := #[]
     let mut scope := Scope.empty
     for parameter in function.parameters do
-      if parameter.typeName.text != "int" then
-        throw (diagnosticAt parameter.typeName.span s!"only int parameters are supported in function '{name}'")
+      let some kind := valueKind? parameter.typeName
+        | throw (diagnosticAt parameter.typeName.span
+            s!"only int and bool parameters are supported in function '{name}'")
       let parameterName := parameter.name.text.copy
       unless IR.validName parameterName do
         throw (diagnosticAt parameter.name.span s!"unsupported parameter name '{parameter.name.text}'")
       scope ← scope.declare parameterName
-        ⟨.parameter, parameters.size, .int, parameter.name.span⟩
-      parameters := parameters.push parameterName
+        ⟨.parameter, parameters.size, kind, parameter.name.span⟩
+      parameters := parameters.push ⟨parameterName, kind⟩
     let returnKind ← match function.resultType with
       | none => pure .void
       | some resultType =>
-        if resultType.text == "int" then pure .int
-        else throw (diagnosticAt resultType.span s!"only int return values are supported in function '{name}'")
+        match valueKind? resultType with
+        | some kind => pure (.value kind)
+        | none => throw (diagnosticAt resultType.span
+            s!"only int and bool return values are supported in function '{name}'")
     result := result.insert name ⟨i, name, parameters, returnKind, scope⟩
   return result
 
@@ -73,35 +82,46 @@ private partial def checkOperand :
       throw (diagnosticAt span "integer literal exceeds signed 64-bit range")
     return (.intLiteral value, .int)
   | .identifier name => do
-    let some symbol := (← read).scope.find? name.text.copy
-      | throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
-    return (.local symbol.id, symbol.valueKind)
+    -- `true` and `false` are predeclared identifiers, so local bindings shadow them.
+    match (← read).scope.find? name.text.copy with
+    | some symbol => return (.local symbol.id, symbol.valueKind)
+    | none =>
+      if name.text == "true" then return (.boolLiteral true, .bool)
+      if name.text == "false" then return (.boolLiteral false, .bool)
+      throw (diagnosticAt name.span s!"unknown identifier '{name.text}'")
   | .call callee arguments span => do
     let name := callee.text.copy
     if let .error error := checkCallable (← read).scope name callee.span then throw error
     let some signature := (← read).all[name]?
       | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
-    unless signature.returnKind == .int do
-      throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
-    if arguments.size != signature.parameters.size then
-      throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
-    let mut checked := #[]
-    for argument in arguments do
-      let (value, kind) ← checkOperand argument
-      unless kind == .int do throw (diagnosticAt argument.span "function arguments must be int")
-      checked := checked.push value
-    return (.call signature.id checked, .int)
-  | .binary op left right span => do
-    let (left, leftKind) ← checkOperand left
-    let (right, rightKind) ← checkOperand right
-    unless leftKind == .int && rightKind == .int do
-      throw (diagnosticAt span "binary operands must be int")
+    let .value kind := signature.returnKind
+      | throw (diagnosticAt callee.span s!"function '{callee.text}' does not return a value")
+    return (.call signature.id (← checkArguments signature arguments span), kind)
+  | .binary op left right _ => do
+    let (left', leftKind) ← checkOperand left
+    let (right', rightKind) ← checkOperand right
+    -- Point at the operand whose type is wrong rather than the whole expression.
+    unless leftKind == .int do throw (diagnosticAt left.span "binary operands must be int")
+    unless rightKind == .int do throw (diagnosticAt right.span "binary operands must be int")
+    let (left, right) := (left', right')
     let (op, kind) : IR.Op × IR.ValueKind := match op with
       | .add => (.add, .int)
       | .subtract => (.subtract, .int)
       | .less => (.less, .bool)
     return (.binary op left right, kind)
   | .stringLiteral _ span => throw (diagnosticAt span "expected int expression")
+where
+  checkArguments (signature : Signature) (arguments : Array Syntax.Expr) (span : Span) :
+      ReaderT Context (Except Diagnostic) (Array Checked.Expr) := do
+    if arguments.size != signature.parameters.size then
+      throw (diagnosticAt span s!"function '{signature.name}' expects {signature.parameters.size} arguments")
+    let mut checked := #[]
+    for argument in arguments, parameter in signature.parameters do
+      let (value, kind) ← checkOperand argument
+      unless kind == parameter.kind do
+        throw (diagnosticAt argument.span s!"function arguments must be {parameter.kind.name}")
+      checked := checked.push value
+    return checked
 
 private def checkPrintln (callee : Syntax.Ident) (arguments : Array Syntax.Expr)
     (span : Span) : CheckM Checked.Stmt := do
@@ -125,15 +145,19 @@ private def checkDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ide
   let nameText := name.text.copy
   unless IR.validName nameText && nameText != "_" do
     throw (diagnosticAt name.span s!"unsupported local name '{nameText}'")
-  if let some typeName := typeName then
-    unless typeName.text == "int" do
-      throw (diagnosticAt typeName.span "only int variable types are supported")
+  let declared ← typeName.mapM fun typeName =>
+    match valueKind? typeName with
+    | some kind => pure kind
+    | none => throw (diagnosticAt typeName.span "only int and bool variable types are supported")
   -- The initializer cannot see the binding being declared.
-  let (value, kind) ← match initializer with
-    | some value => (checkOperand value).run (← read)
-    | none => pure (.intLiteral 0, .int)
-  if typeName.isSome && kind != .int then
-    throw (diagnosticAt ((initializer.map (·.span)).getD name.span) "initializer must be int")
+  let (value, kind) ← match initializer, declared with
+    | some value, _ => (checkOperand value).run (← read)
+    | none, some .bool => pure (.boolLiteral false, .bool)
+    | none, _ => pure (.intLiteral 0, .int)
+  if let some declared := declared then
+    if kind != declared then
+      throw (diagnosticAt ((initializer.map (·.span)).getD name.span)
+        s!"initializer must be {declared.name}")
   let id := (← get).size
   let context ← read
   let scope ← context.scope.declare nameText ⟨.local, id, kind, name.span⟩
@@ -157,18 +181,12 @@ mutual
       let some signature := context.all[name]?
         | throw (diagnosticAt callee.span s!"unknown function '{callee.text}'")
       -- Value-returning calls share the expression path's checks; the result is dropped.
-      if signature.returnKind == .int then
+      if signature.returnKind != .void then
         let (value, _) ← (checkOperand (.call callee arguments span)).run context
         return (.discard value, context)
       if signature.name == "main" then
         throw (diagnosticAt callee.span "cannot call 'main'")
-      unless arguments.size == signature.parameters.size do
-        throw (diagnosticAt span s!"function '{callee.text}' expects {signature.parameters.size} arguments")
-      let mut checked := #[]
-      for argument in arguments do
-        let (value, kind) ← (checkOperand argument).run context
-        unless kind == .int do throw (diagnosticAt argument.span "function arguments must be int")
-        checked := checked.push value
+      let checked ← (checkOperand.checkArguments signature arguments span).run context
       return (.callVoid signature.id checked, context)
     | .varDeclaration name typeName initializer => checkDeclaration name typeName initializer
     | .assignment name value => do
@@ -185,11 +203,12 @@ mutual
       | .void, none => return (.return none, context)
       | .void, some value =>
         throw (diagnosticAt value.span s!"function '{signature.name}' returns no value")
-      | .int, none =>
+      | .value _, none =>
         throw (diagnosticAt span s!"function '{signature.name}' must return a value")
-      | .int, some value =>
+      | .value expected, some value =>
         let (value', kind) ← (checkOperand value).run context
-        unless kind == .int do throw (diagnosticAt value.span "return value must be int")
+        unless kind == expected do
+          throw (diagnosticAt value.span s!"return value must be {expected.name}")
         return (.return (some value'), context)
     | .break span => do
       if context.loopDepth == 0 then throw (diagnosticAt span "break outside loop")
@@ -261,10 +280,10 @@ def check (file : Syntax.File) : Except Diagnostic Checked.File := do
   for function in file.functions do
     let some signature := all[function.name.text.copy]?
       | throw (diagnosticAt function.name.span "internal error: missing function signature")
-    let initial := Array.replicate signature.parameters.size IR.ValueKind.int
+    let initial := signature.parameters.map (·.kind)
     let (body, locals) ← ((checkStatements function.body).run
       ⟨all, signature, signature.scope, 0⟩).run initial
-    if signature.returnKind == .int && !isTerminating function.body then
+    if signature.returnKind != .void && !isTerminating function.body then
       throw (diagnosticAt function.span s!"function '{signature.name}' must end with return")
     functions := functions.push ⟨signature.name, signature.parameters, locals,
       signature.returnKind, body⟩

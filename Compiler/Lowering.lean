@@ -50,6 +50,7 @@ private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
 
 private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
   | .intLiteral value => return .literal value
+  | .boolLiteral value => return .boolLiteral value
   | .local id => do
     let some kind := (← read).function.locals[id]? | throw lowerError
     emitValue (.load · id kind)
@@ -136,11 +137,11 @@ def lower (file : Checked.File) : Except Diagnostic IR.Program := do
   for function in file.functions do
     -- All slots are allocated at entry. Declaration stores stay at their source sites.
     let mut initial : Builder := { slots := function.locals }
-    for index in [:function.parameters.size] do
-      initial ← initial.emit (.store index .int (.argument index))
+    for h : index in [:function.parameters.size] do
+      initial ← initial.emit (.store index function.parameters[index].kind (.argument index))
     let (_, builder) ← ((lowerStatements function.body).run ⟨file, function⟩).run initial
     let builder ← match function.returnKind with
-      | .int => pure builder
+      | .value _ => pure builder
       | .void => builder.terminate (.ret none)
     let blocks ← builder.finish
     functions := functions.push ⟨function.name, function.parameters, function.returnKind, blocks⟩

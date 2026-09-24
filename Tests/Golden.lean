@@ -152,7 +152,7 @@ private def checkInvalidSSARejected : IO Unit := do
 private def checkDirectCFG : IO Unit := do
   let program : IR.Program := ⟨#[
     ⟨"main", #[], .void, #[⟨#[.call 0 "walk" #[], .printInt (.value 0)], .ret none⟩]⟩,
-    ⟨"walk", #[], .int, #[
+    ⟨"walk", #[], .value .int, #[
       ⟨#[], .br 2⟩,
       ⟨#[.printInt (.literal 11)], .ret (some (.literal 7))⟩,
       ⟨#[.binary 0 .less (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
@@ -203,6 +203,14 @@ def goldenMain : IO Unit := do
       ("package main\nfunc f(n int) int { return n }\nfunc main() { f(1 < 2) }\n",
         "3:17: function arguments must be int"),
       ("package main\nfunc main() { missing() }\n", "2:15: unknown function 'missing'"),
+      ("package main\nfunc main() { println(1 + true) }\n", "2:27: binary operands must be int"),
+      ("package main\nfunc main() { println(true + 1) }\n", "2:23: binary operands must be int"),
+      ("package main\nfunc f(b bool) bool { return b }\nfunc main() { f(1) }\n",
+        "3:17: function arguments must be bool"),
+      ("package main\nfunc f() bool { return 1 }\nfunc main() {}\n", "2:24: return value must be bool"),
+      ("package main\nfunc main() { var b bool = 1 }\n", "2:28: initializer must be bool"),
+      ("package main\nfunc main() { b := true; b = 1 }\n",
+        "2:30: assignment type does not match variable type"),
       ("package main\nfunc main() { main() }\n", "2:15: cannot call 'main'"),
       ("package main\nfunc main() { println(1 < 2) }\n", "2:23: println supports only string and int"),
       ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "2:23: return value must be int"),

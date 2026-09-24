@@ -19,6 +19,7 @@ private def emitParameters (output : String) (parameters : Array String) : Strin
 private def emitOperand (parameters : Array String) (output : String) : IR.Operand → String
   | .value id => output ++ "tmp_" ++ toString id
   | .literal value => output ++ toString value
+  | .boolLiteral value => output ++ (if value then "1" else "0")
   | .argument index => output ++ "arg_" ++ parameters[index]!
 
 -- Fixed width escapes stop C from consuming following hexadecimal characters.
@@ -88,17 +89,18 @@ private def emitInstructions (parameters : Array String)
 private def emitTerminator (function : IR.Function) (output : String) : IR.Terminator → String
   | .br target => output ++ "    goto bb" ++ toString target ++ ";\n"
   | .condBr condition ifTrue ifFalse =>
-    emitOperand function.parameters (output ++ "    if (") condition ++ ") goto bb" ++
+    emitOperand (function.parameters.map (·.name)) (output ++ "    if (") condition ++ ") goto bb" ++
       toString ifTrue ++ "; else goto bb" ++ toString ifFalse ++ ";\n"
   | .ret none =>
     output ++ (if Symbol.returnsVoid function then "    return;\n" else "    return 0;\n")
-  | .ret (some value) => emitOperand function.parameters (output ++ "    return ") value ++ ";\n"
+  | .ret (some value) => emitOperand (function.parameters.map (·.name)) (output ++ "    return ") value ++ ";\n"
 
 private def emitHeader (output : String) (function : IR.Function) : String :=
   let result := match function.returnKind with
-    | .int => "int64_t"
+    | .value _ => "int64_t"
     | .void => if Symbol.isEntry function then "int" else "void"
-  emitParameters (output ++ result ++ " " ++ Symbol.function function.name ++ "(") function.parameters ++ ")"
+  emitParameters (output ++ result ++ " " ++ Symbol.function function.name ++ "(")
+    (function.parameters.map (·.name)) ++ ")"
 
 def emit (program : IR.Program) : String := Id.run do
   let mut output := "#include <stdint.h>\n#include <stdio.h>"
@@ -110,8 +112,8 @@ def emit (program : IR.Program) : String := Id.run do
   output := output ++ "\n"
   for function in program.functions do
     output := emitHeader (output ++ "\n" ++ (if Symbol.isEntry function then "" else "static ")) function ++ " {\n"
-    -- Slots must remain visible across block braces. Bool slots also use int64_t,
-    -- matching the existing representation of comparison results as 0 or 1.
+    -- Slots must remain visible across block braces. Bools are int64_t holding 0 or 1 in slots,
+    -- temporaries, parameters, and results, matching the result of a C comparison.
     if let some entry := function.blocks[0]? then
       for instruction in entry.instructions do
         if let .alloca slot _ := instruction then
@@ -119,7 +121,7 @@ def emit (program : IR.Program) : String := Id.run do
     for h : index in [:function.blocks.size] do
       let block := function.blocks[index]
       output := output ++ "  bb" ++ toString index ++ ": {\n"
-      output := emitInstructions function.parameters output block
+      output := emitInstructions (function.parameters.map (·.name)) output block
       output := emitTerminator function output block.terminator ++ "  }\n"
     output := output ++ "}\n"
   return output

@@ -13,6 +13,7 @@ abbrev FunctionId := Nat
 
 inductive Expr where
   | intLiteral (value : Nat)
+  | boolLiteral (value : Bool)
   | local (id : LocalId)
   | call (function : FunctionId) (arguments : Array Expr)
   | binary (op : IR.Op) (left right : Expr)
@@ -34,7 +35,7 @@ inductive Stmt where
 
 structure Function where
   name : String
-  parameters : Array String
+  parameters : Array IR.Parameter
   /-- Slot kinds indexed by `LocalId`, including parameters and declarations in dead source. -/
   locals : Array IR.ValueKind
   returnKind : IR.ReturnKind

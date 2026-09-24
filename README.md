@@ -36,6 +36,11 @@ The LLVM backend emits target independent LLVM IR and asks Clang to optimize,
 generate host machine code, and link it. After the correctness and benchmark gates
 are complete, LLVM becomes the only backend and the C backend is removed.
 
+Values are 64 bit signed integers or bools. LLVM passes, returns, and stores a bool
+as `i1`. C uses `int64_t` holding 0 or 1 for bool slots, temporaries, parameters, and
+results, which is what a C comparison produces. The two backends never call each other,
+so their representations do not have to match.
+
 The LLVM backend invokes `clang -O2 -x ir`; generated IR contains no hard-coded target
 triple or data layout. The temporary C backend uses the system `cc`.
 

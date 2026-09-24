@@ -56,7 +56,7 @@ example : IR.Program → Except IR.VerifyError Unit := IR.verify
 
 private def mainFunction : IR.Function := ⟨"main", #[], .void, #[⟨#[], .ret none⟩]⟩
 private def intFunction : IR.Function :=
-  ⟨"f", #["x"], .int, #[⟨#[], .ret (some (.argument 0))⟩]⟩
+  ⟨"f", #[⟨"x", .int⟩], .value .int, #[⟨#[], .ret (some (.argument 0))⟩]⟩
 
 private def accepted (program : IR.Program) : Bool :=
   (IR.verify program).toBool
@@ -69,8 +69,8 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
 #guard accepted ⟨#[mainFunction, intFunction]⟩
 #guard [({ intFunction with name := "bad-name" }, "unsupported function name 'bad-name'"),
     ({ intFunction with name := "" }, "unsupported function name ''"),
-    ({ intFunction with parameters := #["bad-name"] }, "unsupported parameter name 'bad-name'"),
-    ({ intFunction with parameters := #["x", "x"] }, "duplicate parameter 'x'"),
+    ({ intFunction with parameters := #[⟨"bad-name", .int⟩] }, "unsupported parameter name 'bad-name'"),
+    ({ intFunction with parameters := #[⟨"x", .int⟩, ⟨"x", .int⟩] }, "duplicate parameter 'x'"),
     ({ intFunction with returnKind := .void }, "void function cannot return a value"),
     ({ intFunction with blocks := #[] }, "function must have an entry block"),
     ({ intFunction with blocks := #[⟨#[], .ret none⟩] }, "int function must return a value")].all
@@ -78,7 +78,7 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
 #guard rejected ⟨#[]⟩ "expected main function"
 #guard rejected ⟨#[intFunction]⟩ "expected main function"
 #guard rejected ⟨#[mainFunction, intFunction, intFunction]⟩ "duplicate function 'f'"
-#guard [{ mainFunction with parameters := #["x"] }, { mainFunction with returnKind := .int }].all
+#guard [{ mainFunction with parameters := #[⟨"x", .int⟩] }, { mainFunction with returnKind := .value .int }].all
   fun function => rejected ⟨#[function]⟩ "main must have no parameters or return value"
 #guard [(IR.Terminator.br 1, "branch target 1 is out of range"),
     (.br 0, "branch to entry block is not allowed"),
@@ -90,7 +90,7 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
     (.printInt (.argument 0), "argument index 0 is out of range"),
     (.call 0 "missing" #[], "unknown function 'missing'"),
     (.call 0 "f" #[], "function 'f' expects 1 arguments"),
-    (.call 0 "main" #[], "function 'main' does not return int"),
+    (.call 0 "main" #[], "function 'main' does not return a value"),
     (.callVoid "main" #[], "cannot call 'main'"),
     (.callVoid "f" #[intValue], "function 'f' does not return void"),
     (.call 0 "f" #[.argument 0], "argument index 0 is out of range"),
@@ -162,6 +162,19 @@ private def definition : IR.Instruction := .binary 0 .add intValue intValue
 #guard accepted ⟨#[{ mainFunction with blocks :=
   #[⟨#[.binary 100 .add intValue intValue, .binary 7 .subtract (.value 100) intValue,
     .call 42 "f" #[.value 7], .printInt (.value 42)], .ret none⟩] }, intFunction]⟩
+
+-- Parameter and result kinds type arguments, call results, and returns.
+private def boolFunction : IR.Function :=
+  ⟨"g", #[⟨"b", .bool⟩], .value .bool, #[⟨#[], .ret (some (.argument 0))⟩]⟩
+#guard accepted ⟨#[{ mainFunction with blocks := #[
+  ⟨#[.call 0 "g" #[.boolLiteral true]], .condBr (.value 0) 1 1⟩, ⟨#[], .ret none⟩] },
+  boolFunction]⟩
+#guard rejected ⟨#[{ mainFunction with blocks := #[⟨#[.call 0 "g" #[intValue]], .ret none⟩] },
+  boolFunction]⟩ "expected bool operand"
+#guard rejected ⟨#[mainFunction, { boolFunction with blocks := #[⟨#[], .ret (some intValue)⟩] }]⟩
+  "expected bool operand"
+#guard rejected ⟨#[mainFunction, { boolFunction with blocks := #[⟨#[], .ret none⟩] }]⟩
+  "bool function must return a value"
 
 -- Exercise the backend field contract for non-main void functions.
 private def voidProgram : IR.Program := ⟨#[mainFunction, { mainFunction with name := "f" }]⟩

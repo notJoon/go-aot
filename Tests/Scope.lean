@@ -74,7 +74,7 @@ private def inner : Scope :=
     ("func main() { var x int = 1 < 2 }", "initializer must be int"),
     ("func main() { var x int; x = 1 < 2 }", "assignment type does not match variable type"),
     ("func main() { x := 1 < 2; x = 1 }", "assignment type does not match variable type"),
-    ("func main() { var x string }", "only int variable types are supported"),
+    ("func main() { var x string }", "only int and bool variable types are supported"),
     ("func main() { x := \"text\" }", "expected int expression"),
     ("func main() { println := 1; println(2) }", "cannot call non-function 'println'"),
     ("func f() int { return 1 }; func main() { f := 2; x := f() }", "cannot call non-function 'f'"),
