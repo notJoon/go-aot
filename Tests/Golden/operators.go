@@ -18,6 +18,17 @@ func no(n int) bool {
     return false
 }
 
+func pick(n int, b bool) int {
+    if b {
+        return n
+    }
+    return 0 - n
+}
+
+func report(n int, b bool) {
+    println(pick(n, b))
+}
+
 func main() {
     println(1 + 2 * 3)
     println((1 + 2) * 3)
@@ -47,4 +58,9 @@ func main() {
     show(no(7) || yes(8))
     show(no(9) || yes(10) && no(11))
     show(yes(12) || no(13) && yes(14))
+    x := 15
+    println(pick(x, yes(16) && no(17)))
+    report(x, no(18) || yes(19))
+    show(no(20) == (yes(21) && yes(22)))
+    println(x + pick(1, no(23) || no(24)))
 }
