@@ -329,7 +329,8 @@ private def pendingBuilder (blocks : Array Lowering.PendingBlock)
 #guard [
     #[Checked.Stmt.printInt (.local 1)],
     #[Checked.Stmt.printInt (.call 1 #[])],
-    #[Checked.Stmt.callVoid 1 #[]]].all fun body =>
+    #[Checked.Stmt.callVoid 1 #[]],
+    #[Checked.Stmt.discard (.call 1 #[])]].all fun body =>
   let file : Checked.File := ⟨#[⟨"main", #[], #[], .void, body⟩]⟩
   match Lowering.lower file with
   | .error error => error.message == "internal error: invalid checked syntax"
