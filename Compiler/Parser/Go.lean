@@ -71,6 +71,12 @@ private def intLiteral (source : Source) : P Syntax.Expr := do
   | some text => return .intLiteral text token.span
   | none => Parser.fail "invalid integer literal span"
 
+private def floatLiteral (source : Source) : P Syntax.Expr := do
+  let token ← tokenOf .floatLiteral "expected floating-point literal"
+  match source.slice? token.span with
+  | some text => return .floatLiteral text token.span
+  | none => Parser.fail "invalid floating-point literal span"
+
 private def peekSymbol (text : String) : P Bool := do
   match ← Parser.peek? with
   | some { kind := .symbol actual, .. } => return actual == text
@@ -108,12 +114,16 @@ private def binaryOperator? : P (Option (String × Syntax.BinaryOp × Nat)) := d
     | ">=" => some (.greaterEqual, 3)
     | "+" => some (.add, 4)
     | "-" => some (.subtract, 4)
+    | "|" => some (.bitOr, 4)
+    | "^" => some (.bitXor, 4)
     | "*" => some (.multiply, 5)
     | "/" => some (.divide, 5)
     | "%" => some (.remainder, 5)
+    | "<<" => some (.shiftLeft, 5)
+    | ">>" => some (.shiftRight, 5)
+    | "&" => some (.bitAnd, 5)
+    | "&^" => some (.bitClear, 5)
     | _ => none
-  if op?.isNone && ["|", "^", "<<", ">>", "&", "&^"].contains text then
-    Parser.fail "bitwise operators are unsupported"
   return op?.map fun (op, precedence) => (text, op, precedence)
 
 private def rejectLabel (keyword : String) : P Unit := do
@@ -139,6 +149,7 @@ mutual
     let op? := match ← Parser.peek? with
       | some { kind := .symbol "-", .. } => some ("-", Syntax.UnaryOp.negate)
       | some { kind := .symbol "!", .. } => some ("!", .not)
+      | some { kind := .symbol "^", .. } => some ("^", .complement)
       | _ => none
     let some (text, op) := op? | primary source
     let token ← symbol text
@@ -154,6 +165,7 @@ mutual
       return value
     | some { kind := .stringLiteral, .. } => stringLiteral source
     | some { kind := .intLiteral, .. } => intLiteral source
+    | some { kind := .floatLiteral, .. } => floatLiteral source
     | some { kind := .identifier, .. } =>
       let name ← identifier source
       unless ← peekSymbol "(" do return .identifier name

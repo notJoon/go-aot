@@ -1,6 +1,7 @@
 package main
 
 func main() {
-    println(9223372036854775807 + 1)
-    println(0 - 9223372036854775807 - 2)
+    largest := 9223372036854775807
+    println(largest + 1)
+    println(-largest - 2)
 }

@@ -12,11 +12,14 @@ abbrev LocalId := Nat
 abbrev FunctionId := Nat
 
 inductive Expr where
-  | intLiteral (value : Nat)
+  | intLiteral (value : Int)
+  | floatLiteral (value : Float)
   | boolLiteral (value : Bool)
   | local (id : LocalId)
   | call (function : FunctionId) (arguments : Array Expr)
-  | binary (op : IR.Op) (kind : IR.ValueKind) (left right : Expr)
+  | binary (op : IR.Op) (ty : Ty) (left right : Expr)
+  | shift (op : IR.ShiftOp) (ty : Ty) (value : Expr) (countTy : Ty) (count : Expr)
+  | convert (source target : Ty) (value : Expr)
   /-- Short circuit conjunction. `right` runs only when `left` is true. -/
   | and (left right : Expr)
   /-- Short circuit disjunction. `right` runs only when `left` is false. -/
@@ -26,7 +29,7 @@ inductive Stmt where
   | declare (id : LocalId) (initializer : Expr)
   | assign (id : LocalId) (value : Expr)
   | printString (bytes : ByteArray)
-  | printInt (value : Expr)
+  | print (ty : Ty) (value : Expr)
   | callVoid (function : FunctionId) (arguments : Array Expr)
   /-- Evaluates a value-returning call and drops its result. -/
   | discard (value : Expr)
@@ -40,8 +43,8 @@ inductive Stmt where
 structure Function where
   name : String
   parameters : Array IR.Parameter
-  /-- Slot kinds indexed by `LocalId`, including parameters and declarations in dead source. -/
-  locals : Array IR.ValueKind
+  /-- Slot types indexed by `LocalId`, including parameters and declarations in dead source. -/
+  locals : Array Ty
   returnKind : IR.ReturnKind
   body : Array Stmt
 

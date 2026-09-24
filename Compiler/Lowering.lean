@@ -50,20 +50,28 @@ private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
 
 private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
   | .intLiteral value => return .literal value
+  | .floatLiteral value => return .floatLiteral value
   | .boolLiteral value => return .boolLiteral value
   | .local id => do
-    let some kind := (← read).function.locals[id]? | throw lowerError
-    emitValue (.load · id kind)
+    let some ty := (← read).function.locals[id]? | throw lowerError
+    emitValue (.load · id ty)
   | .call id arguments => do
     let some function := (← read).file.functions[id]? | throw lowerError
     let mut lowered := #[]
     for argument in arguments do
       lowered := lowered.push (← lowerExpr argument)
     emitValue (.call · function.name lowered)
-  | .binary op kind left right => do
+  | .binary op ty left right => do
     let left ← lowerExpr left
     let right ← lowerExpr right
-    emitValue (.binary · op kind left right)
+    emitValue (.binary · op ty left right)
+  | .shift op ty value countTy count => do
+    let value ← lowerExpr value
+    let count ← lowerExpr count
+    emitValue (.shift · op ty value countTy count)
+  | .convert source target value => do
+    let value ← lowerExpr value
+    emitValue (.convert · source target value)
   | .and left right => shortCircuit true left right
   | .or left right => shortCircuit false left right
 where
@@ -87,10 +95,10 @@ mutual
     startStatement
     match statement with
     | .declare id initializer | .assign id initializer =>
-      let some kind := (← read).function.locals[id]? | throw lowerError
-      emit (.store id kind (← lowerExpr initializer))
+      let some ty := (← read).function.locals[id]? | throw lowerError
+      emit (.store id ty (← lowerExpr initializer))
     | .printString bytes => emit (.printString bytes)
-    | .printInt value => emit (.printInt (← lowerExpr value))
+    | .print ty value => emit (.print ty (← lowerExpr value))
     | .callVoid id arguments =>
       let some function := (← read).file.functions[id]? | throw lowerError
       let mut lowered := #[]
@@ -154,7 +162,7 @@ def lower (file : Checked.File) : Except Diagnostic IR.Program := do
     -- All slots are allocated at entry. Declaration stores stay at their source sites.
     let mut initial : Builder := { slots := function.locals }
     for h : index in [:function.parameters.size] do
-      initial ← initial.emit (.store index function.parameters[index].kind (.argument index))
+      initial ← initial.emit (.store index function.parameters[index].ty (.argument index))
     let (_, builder) ← ((lowerStatements function.body).run ⟨file, function⟩).run initial
     let builder ← match function.returnKind with
       | .value _ => pure builder

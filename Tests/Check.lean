@@ -28,8 +28,8 @@ private def checked (text : String) : Option Checked.File :=
 
 #guard [
     ("func f() int { return 1; println(missing) }; func main() {}", "unknown identifier 'missing'"),
-    ("func f() int { return 1; for { break; println(1 < 2) } }; func main() {}",
-      "println supports only string and int"),
+    ("func f() int { return 1; for { break; println(1 + true) } }; func main() {}",
+      "operator + is not defined on bool"),
     ("func main() { x := x }", "unknown identifier 'x'")].all fun (body, message) =>
   match parse (Source.ofString ("package main\n" ++ body)) >>= Check.check with
   | .error error => error.phase == .lowering && error.message == message

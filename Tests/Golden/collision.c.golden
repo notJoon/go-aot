@@ -8,16 +8,15 @@ static int64_t go_tmp_1(int64_t arg_tmp_0) {
   bb0: {
     slot_0 = arg_tmp_0;
     int64_t tmp_0 = slot_0;
-    int64_t tmp_1 = tmp_0 + 1;
+    int64_t tmp_1 = (int64_t)((uint64_t)tmp_0 + (uint64_t)1);
     return tmp_1;
   }
 }
 
 int main(void) {
   bb0: {
-    int64_t tmp_0 = 40 + 1;
-    int64_t tmp_1 = go_tmp_1(tmp_0);
-    printf("%lld\n", (long long)tmp_1);
+    int64_t tmp_0 = go_tmp_1(41);
+    printf("%lld\n", (long long)tmp_0);
     return 0;
   }
 }

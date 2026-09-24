@@ -85,9 +85,9 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
     (.condBr boolValue 1 2, "branch target 1 is out of range"),
     (.ret (some intValue), "void function cannot return a value")].all fun (terminator, message) =>
   rejected ⟨#[{ mainFunction with blocks := #[⟨#[comparison], terminator⟩] }]⟩ message
-#guard [(IR.Instruction.printInt (.literal 9223372036854775808),
-      "integer literal exceeds signed 64-bit range"),
-    (.printInt (.argument 0), "argument index 0 is out of range"),
+#guard [(IR.Instruction.print .int (.literal 9223372036854775808),
+      "integer literal 9223372036854775808 is out of range for int"),
+    (.print .int (.argument 0), "argument index 0 is out of range"),
     (.call 0 "missing" #[], "unknown function 'missing'"),
     (.call 0 "f" #[], "function 'f' expects 1 arguments"),
     (.call 0 "main" #[], "function 'main' does not return a value"),
@@ -98,7 +98,7 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
   fun (instruction, message) =>
     rejected ⟨#[{ mainFunction with blocks := #[⟨#[instruction], .ret none⟩] }, intFunction]⟩ message
 #guard rejected ⟨#[{ mainFunction with blocks :=
-  #[⟨#[], .ret none⟩, ⟨#[.printInt (.argument 0)], .ret none⟩] }]⟩
+  #[⟨#[], .ret none⟩, ⟨#[.print .int (.argument 0)], .ret none⟩] }]⟩
   "argument index 0 is out of range"
 #guard rejected ⟨#[mainFunction, { intFunction with blocks :=
   #[⟨#[], .ret (some (.argument 1))⟩] }]⟩ "argument index 1 is out of range"
@@ -113,12 +113,12 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
   "branch target 2 is out of range"
 #guard accepted ⟨#[{ mainFunction with blocks :=
   #[⟨#[], .br 1⟩, ⟨#[comparison], .condBr boolValue 1 1⟩,
-    ⟨#[.printString (ByteArray.mk #[0, 255]), .printInt (.literal 9223372036854775807)], .ret none⟩] }]⟩
+    ⟨#[.printString (ByteArray.mk #[0, 255]), .print .int (.literal 9223372036854775807)], .ret none⟩] }]⟩
 #guard accepted ⟨#[mainFunction,
   { intFunction with blocks := #[⟨#[.call 0 "g" #[.argument 0]], .ret (some (.value 0))⟩] },
   { intFunction with name := "g", blocks := #[⟨#[.call 0 "f" #[.argument 0]], .ret (some (.value 0))⟩] }]⟩
 #guard match IR.verify ⟨#[{ mainFunction with blocks :=
-    #[⟨#[.printString ByteArray.empty, .printInt (.argument 0)], .ret none⟩] }]⟩ with
+    #[⟨#[.printString ByteArray.empty, .print .int (.argument 0)], .ret none⟩] }]⟩ with
   | .error e => e.function? == some "main" && e.block? == some 0 && e.instruction? == some 1 && !e.terminator
   | .ok _ => false
 #guard match IR.verify ⟨#[{ mainFunction with blocks := #[⟨#[], .br 0⟩] }]⟩ with
@@ -129,9 +129,9 @@ private def rejected (program : IR.Program) (message : String) : Bool :=
 
 private def definition : IR.Instruction := .binary 0 .add .int intValue intValue
 
-#guard [(#[⟨#[.printInt (.value 42)], .ret none⟩],
+#guard [(#[⟨#[.print .int (.value 42)], .ret none⟩],
       "value 42 is not defined earlier in this block", 0, some 0, false),
-    (#[⟨#[.printInt (.value 0), definition], .ret none⟩],
+    (#[⟨#[.print .int (.value 0), definition], .ret none⟩],
       "value 0 is not defined earlier in this block", 0, some 0, false),
     (#[⟨#[.binary 0 .add .int (.value 0) intValue], .ret none⟩],
       "value 0 is not defined earlier in this block", 0, some 0, false),
@@ -139,7 +139,7 @@ private def definition : IR.Instruction := .binary 0 .add .int intValue intValue
       "value 0 is defined more than once", 0, some 1, false),
     (#[⟨#[definition], .br 1⟩, ⟨#[definition], .ret none⟩],
       "value 0 is defined more than once", 1, some 0, false),
-    (#[⟨#[definition], .br 1⟩, ⟨#[.printInt (.value 0)], .ret none⟩],
+    (#[⟨#[definition], .br 1⟩, ⟨#[.print .int (.value 0)], .ret none⟩],
       "value 0 is not defined earlier in this block", 1, some 0, false),
     (#[⟨#[], .condBr intValue 1 1⟩, ⟨#[], .ret none⟩],
       "expected bool operand", 0, none, true),
@@ -147,7 +147,7 @@ private def definition : IR.Instruction := .binary 0 .add .int intValue intValue
       "expected int operand", 0, some 1, false),
     (#[⟨#[comparison, .call 1 "f" #[boolValue]], .ret none⟩],
       "expected int operand", 0, some 1, false),
-    (#[⟨#[comparison, .printInt boolValue], .ret none⟩],
+    (#[⟨#[comparison, .print .int boolValue], .ret none⟩],
       "expected int operand", 0, some 1, false)].all
   fun ((blocks : Array IR.Block), message, block, instruction, terminator) =>
     match IR.verify ⟨#[{ mainFunction with blocks }, intFunction]⟩ with
@@ -161,17 +161,37 @@ private def definition : IR.Instruction := .binary 0 .add .int intValue intValue
   | .ok _ => false
 #guard accepted ⟨#[{ mainFunction with blocks :=
   #[⟨#[.binary 100 .add .int intValue intValue, .binary 7 .subtract .int (.value 100) intValue,
-    .call 42 "f" #[.value 7], .printInt (.value 42)], .ret none⟩] }, intFunction]⟩
+    .call 42 "f" #[.value 7], .print .int (.value 42)], .ret none⟩] }, intFunction]⟩
 
 -- Only equality accepts bool operands, and both operands must have the operator kind.
 #guard accepted ⟨#[{ mainFunction with blocks := #[
   ⟨#[.binary 0 .notEqual .bool (.boolLiteral true) (.boolLiteral false)], .condBr (.value 0) 1 1⟩,
   ⟨#[], .ret none⟩] }]⟩
 #guard [(IR.Instruction.binary 0 .add .bool (.boolLiteral true) (.boolLiteral true),
-      "expected int operator kind"),
-    (.binary 0 .less .bool (.boolLiteral true) (.boolLiteral true), "expected int operator kind"),
+      "operator is not defined on bool"),
+    (.binary 0 .less .bool (.boolLiteral true) (.boolLiteral true), "operator is not defined on bool"),
     (.binary 0 .equal .bool (.boolLiteral true) intValue, "expected bool operand"),
     (.binary 0 .equal .int intValue (.boolLiteral true), "expected int operand")].all
+  fun (instruction, message) =>
+    rejected ⟨#[{ mainFunction with blocks := #[⟨#[instruction], .ret none⟩] }]⟩ message
+
+-- Literals take the type of their use, and conversions and shifts check their operand types.
+#guard accepted ⟨#[{ mainFunction with blocks := #[⟨#[
+  .print .uint8 (.literal 255), .print .int8 (.literal (-128)), .print .float64 (.floatLiteral 1.5),
+  .convert 0 .int8 .float64 (.literal (-1)), .print .float64 (.value 0),
+  .shift 1 .left .uint16 (.literal 1) .int8 (.literal 3), .print .uint16 (.value 1),
+  .binary 2 .remainder .uint32 (.literal 7) (.literal 2), .print .uint32 (.value 2)], .ret none⟩] }]⟩
+#guard [(IR.Instruction.print .int8 (.literal 128), "integer literal 128 is out of range for int8"),
+    (.print .uint8 (.literal (-1)), "integer literal -1 is out of range for uint8"),
+    (.print .int (.floatLiteral 1.5), "expected int operand"),
+    (.print .float64 (.literal 1), "expected float64 operand"),
+    (.print .float64 (.floatLiteral (1 / 0)), "float literal must be finite"),
+    (.binary 0 .remainder .float64 (.floatLiteral 1) (.floatLiteral 2), "operator is not defined on float64"),
+    (.binary 0 .bitAnd .float64 (.floatLiteral 1) (.floatLiteral 2), "operator is not defined on float64"),
+    (.shift 0 .left .float64 (.floatLiteral 1) .int (.literal 1), "shift operands must be integers"),
+    (.shift 0 .left .int (.literal 1) .float64 (.floatLiteral 1), "shift operands must be integers"),
+    (.convert 0 .bool .int (.boolLiteral true), "cannot convert bool to int"),
+    (.convert 0 .int8 .int (.literal 300), "integer literal 300 is out of range for int8")].all
   fun (instruction, message) =>
     rejected ⟨#[{ mainFunction with blocks := #[⟨#[instruction], .ret none⟩] }]⟩ message
 
@@ -205,7 +225,7 @@ private def stringsProgram : IR.Program := ⟨#[
     ⟨#[.printString "first".toUTF8], .br 1⟩,
     ⟨#[.printString "second".toUTF8, .printString "first".toUTF8], .ret none⟩] },
   { intFunction with blocks := #[
-    ⟨#[.printString "second".toUTF8, .printInt (.argument 0)],
+    ⟨#[.printString "second".toUTF8, .print .int (.argument 0)],
       .ret (some (.argument 0))⟩] }]⟩
 private def stringsLLVM := Backend.LLVM.emit stringsProgram
 
@@ -229,7 +249,7 @@ private def lowered (text : String) : Option IR.Program :=
   fun (literal, value) =>
     match lowered ("package main\nfunc main() { println(" ++ literal ++ ") }\n") with
     | some program => match (program.functions[0]?.map (·.blocks) : Option (Array IR.Block)) with
-      | some #[⟨#[.printInt (.literal actual)], .ret none⟩] => actual == value
+      | some #[⟨#[.print .int (.literal actual)], .ret none⟩] => actual == value
       | _ => false
     | none => false
 
@@ -263,7 +283,7 @@ private def lowered (text : String) : Option IR.Program :=
 -- Slots have function scope, while loaded values retain the block-local SSA rule.
 #guard accepted ⟨#[{ mainFunction with blocks := #[
   ⟨#[.alloca 7 .int, .store 7 .int intValue], .br 1⟩,
-  ⟨#[.load 0 7 .int, .printInt (.value 0), .store 7 .int (.literal 2)], .ret none⟩] }]⟩
+  ⟨#[.load 0 7 .int, .print .int (.value 0), .store 7 .int (.literal 2)], .ret none⟩] }]⟩
 #guard accepted ⟨#[{ mainFunction with blocks := #[
   ⟨#[.alloca 7 .bool, comparison, .store 7 .bool boolValue, .load 1 7 .bool],
     .condBr (.value 1) 1 1⟩, ⟨#[], .ret none⟩] }]⟩
@@ -283,7 +303,7 @@ private def lowered (text : String) : Option IR.Program :=
     (#[⟨#[.alloca 7 .int, .load 0 7 .int, definition], .ret none⟩],
       "value 0 is defined more than once"),
     (#[⟨#[.alloca 7 .int, .load 0 7 .int], .br 1⟩,
-      ⟨#[.printInt (.value 0)], .ret none⟩], "value 0 is not defined earlier in this block")].all
+      ⟨#[.print .int (.value 0)], .ret none⟩], "value 0 is not defined earlier in this block")].all
   fun ((blocks : Array IR.Block), message) => rejected ⟨#[{ mainFunction with blocks }]⟩ message
 #guard rejected ⟨#[{ mainFunction with blocks := #[⟨#[.alloca 7 .int], .ret none⟩] },
   { intFunction with blocks := #[⟨#[.load 0 7 .int], .ret (some (.value 0))⟩] }]⟩
@@ -352,8 +372,8 @@ private def pendingBuilder (blocks : Array Lowering.PendingBlock)
   | none => false
 
 #guard [
-    #[Checked.Stmt.printInt (.local 1)],
-    #[Checked.Stmt.printInt (.call 1 #[])],
+    #[Checked.Stmt.print .int (.local 1)],
+    #[Checked.Stmt.print .int (.call 1 #[])],
     #[Checked.Stmt.callVoid 1 #[]],
     #[Checked.Stmt.discard (.call 1 #[])]].all fun body =>
   let file : Checked.File := ⟨#[⟨"main", #[], #[], .void, body⟩]⟩

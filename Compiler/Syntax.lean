@@ -16,17 +16,28 @@ structure Ident where
 
 inductive BinaryOp where
   | add | subtract | multiply | divide | remainder
+  | bitAnd | bitOr | bitXor | bitClear | shiftLeft | shiftRight
   | equal | notEqual | less | lessEqual | greater | greaterEqual
   | and | or
   deriving Repr, BEq
 
 inductive UnaryOp where
-  | negate | not
+  | negate | not | complement
   deriving Repr, BEq
+
+/-- The Go spelling of an operator, used in diagnostics. -/
+def BinaryOp.symbol : BinaryOp → String
+  | .add => "+" | .subtract => "-" | .multiply => "*" | .divide => "/" | .remainder => "%"
+  | .bitAnd => "&" | .bitOr => "|" | .bitXor => "^" | .bitClear => "&^"
+  | .shiftLeft => "<<" | .shiftRight => ">>"
+  | .equal => "==" | .notEqual => "!=" | .less => "<" | .lessEqual => "<="
+  | .greater => ">" | .greaterEqual => ">="
+  | .and => "&&" | .or => "||"
 
 inductive Expr where
   | stringLiteral (text : String) (span : Span)
   | intLiteral (text : String.Slice) (span : Span)
+  | floatLiteral (text : String.Slice) (span : Span)
   | identifier (name : Ident)
   | call (callee : Ident) (arguments : Array Expr) (span : Span)
   | binary (op : BinaryOp) (left right : Expr) (span : Span)
@@ -34,7 +45,8 @@ inductive Expr where
   deriving Repr, BEq
 
 def Expr.span : Expr → Span
-  | .stringLiteral _ span | .intLiteral _ span | .call _ _ span | .binary _ _ _ span
+  | .stringLiteral _ span | .intLiteral _ span | .floatLiteral _ span | .call _ _ span
+  | .binary _ _ _ span
   | .unary _ _ span => span
   | .identifier name => name.span
 

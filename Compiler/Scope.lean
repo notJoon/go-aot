@@ -13,11 +13,11 @@ inductive SymbolKind where
   | local
   deriving BEq
 
-/-- A parameter or local binding, with its local ID, value kind, and declaration span. -/
+/-- A parameter or local binding, with its local ID, type, and declaration span. -/
 structure Symbol where
   kind : SymbolKind
   id : Checked.LocalId
-  valueKind : IR.ValueKind
+  ty : Ty
   span : Span
   deriving BEq
 

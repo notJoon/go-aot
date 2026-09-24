@@ -17,12 +17,12 @@ static int64_t go_fib(int64_t arg_n) {
   }
   bb2: {
     int64_t tmp_3 = slot_0;
-    int64_t tmp_4 = tmp_3 - 1;
+    int64_t tmp_4 = (int64_t)((uint64_t)tmp_3 - (uint64_t)1);
     int64_t tmp_5 = go_fib(tmp_4);
     int64_t tmp_6 = slot_0;
-    int64_t tmp_7 = tmp_6 - 2;
+    int64_t tmp_7 = (int64_t)((uint64_t)tmp_6 - (uint64_t)2);
     int64_t tmp_8 = go_fib(tmp_7);
-    int64_t tmp_9 = tmp_5 + tmp_8;
+    int64_t tmp_9 = (int64_t)((uint64_t)tmp_5 + (uint64_t)tmp_8);
     return tmp_9;
   }
 }

@@ -14,7 +14,7 @@ private def failsWith (result : Except Diagnostic α) (expected : Diagnostic) : 
   let source := Source.ofString (before ++ literal ++ ") }\n")
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + literal.utf8ByteSize⟩,
-    "integer literal exceeds signed 64-bit range"⟩
+    "constant 9223372036854775808 overflows int"⟩
   failsWith (parse source >>= Check.check) expected &&
     failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
 
@@ -92,8 +92,6 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     ("x := 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
     ("x = 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
     ("println(1)", ",", " 2 }", "expected semicolon"),
-    ("println(1 ", "&", " 2) }", "bitwise operators are unsupported"),
-    ("println(1 ", "<<", " 2) }", "bitwise operators are unsupported"),
     ("x := ", "}", "", "expected expression"),
     ("", "f", "() = 1 }", "assignment target must be an identifier"),
     ("", "1", " = 2 }", "assignment target must be an identifier")].all

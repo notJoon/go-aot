@@ -20,7 +20,7 @@ structure Builder where
   blocks : Array PendingBlock := #[{}]
   current : Option IR.BlockId := some 0
   nextValue : IR.ValueId := 0
-  slots : Array IR.ValueKind := #[]
+  slots : Array Ty := #[]
   loops : List LoopContext := []
 
 private def builderError : Diagnostic :=
@@ -30,8 +30,8 @@ def Builder.newBlock (builder : Builder) : IR.BlockId × Builder :=
   (builder.blocks.size, { builder with blocks := builder.blocks.push {} })
 
 /-- Allocate a compiler temporary slot after the checked locals. -/
-def Builder.newSlot (builder : Builder) (kind : IR.ValueKind) : IR.SlotId × Builder :=
-  (builder.slots.size, { builder with slots := builder.slots.push kind })
+def Builder.newSlot (builder : Builder) (ty : Ty) : IR.SlotId × Builder :=
+  (builder.slots.size, { builder with slots := builder.slots.push ty })
 
 def Builder.selectBlock (builder : Builder) (target : IR.BlockId) :
     Except Diagnostic Builder := do
@@ -120,7 +120,7 @@ def Builder.finish (builder : Builder) : Except Diagnostic (Array IR.Block) := d
         | .condBr operand yes no => .condBr operand <$> remap yes <*> remap no
         | .ret value => pure (.ret value)
       let instructions := if i == 0 then
-        (builder.slots.mapIdx fun slot kind => IR.Instruction.alloca slot kind) ++ block.instructions
+        (builder.slots.mapIdx fun slot ty => IR.Instruction.alloca slot ty) ++ block.instructions
         else block.instructions
       blocks := blocks.push ⟨instructions, terminator⟩
   return blocks

@@ -6,7 +6,7 @@ import Compiler.Backend.LLVM
 open GoAot
 
 private def verificationProgram (count : Nat) : IR.Program :=
-  let instructions := Array.replicate count (IR.Instruction.printInt (.literal 1))
+  let instructions := Array.replicate count (IR.Instruction.print .int (.literal 1))
   ⟨#[⟨"main", #[], .void, #[⟨instructions, .ret none⟩]⟩]⟩
 
 @[noinline] private def verificationAllocations (program : IR.Program) : IO Nat := do
