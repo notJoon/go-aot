@@ -48,6 +48,27 @@ private abbrev LowerM := ReaderT Context (StateT Builder (Except Diagnostic))
 @[inline] private def newBlock : LowerM IR.BlockId :=
   fun _ builder => pure builder.newBlock
 
+/-- Whether lowering `expr` ends in a different block than it starts in. -/
+private partial def branches : Checked.Expr → Bool
+  | .and .. | .or .. => true
+  | .call _ arguments => arguments.any branches
+  | .binary _ _ left right | .shift _ _ left _ right => branches left || branches right
+  | .convert _ _ value => branches value
+  | .intLiteral _ | .floatLiteral _ | .boolLiteral _ | .local _ => false
+
+private def typeOf : Checked.Expr → LowerM Ty
+  | .local id => do
+    let some ty := (← read).function.locals[id]? | throw lowerError
+    return ty
+  | .call id _ => do
+    let some { returnKind := .value ty, .. } := (← read).file.functions[id]? | throw lowerError
+    return ty
+  | .binary op ty _ _ => return if op.isComparison then .bool else ty
+  | .shift _ ty .. | .convert _ ty _ => return ty
+  | .intLiteral _ => return .int
+  | .floatLiteral _ => return .float64
+  | .boolLiteral _ | .and .. | .or .. => return .bool
+
 private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
   | .intLiteral value => return .literal value
   | .floatLiteral value => return .floatLiteral value
@@ -57,17 +78,13 @@ private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
     emitValue (.load · id ty)
   | .call id arguments => do
     let some function := (← read).file.functions[id]? | throw lowerError
-    let mut lowered := #[]
-    for argument in arguments do
-      lowered := lowered.push (← lowerExpr argument)
+    let lowered ← lowerOperands arguments
     emitValue (.call · function.name lowered)
   | .binary op ty left right => do
-    let left ← lowerExpr left
-    let right ← lowerExpr right
+    let #[left, right] ← lowerOperands #[left, right] | throw lowerError
     emitValue (.binary · op ty left right)
   | .shift op ty value countTy count => do
-    let value ← lowerExpr value
-    let count ← lowerExpr count
+    let #[value, count] ← lowerOperands #[value, count] | throw lowerError
     emitValue (.shift · op ty value countTy count)
   | .convert source target value => do
     let value ← lowerExpr value
@@ -75,6 +92,20 @@ private partial def lowerExpr : Checked.Expr → LowerM IR.Operand
   | .and left right => shortCircuit true left right
   | .or left right => shortCircuit false left right
 where
+  -- Values cannot cross blocks, so an operand followed by a short circuit waits in a slot.
+  lowerOperands (operands : Array Checked.Expr) : LowerM (Array IR.Operand) := do
+    let mut lowered : Array (IR.Operand ⊕ (IR.SlotId × Ty)) := #[]
+    for h : index in [:operands.size] do
+      let operand ← lowerExpr operands[index]
+      if operand matches .value _ && (operands.extract (index + 1)).any branches then
+        let ty ← typeOf operands[index]
+        let slot ← fun _ builder => pure (builder.newSlot ty)
+        emit (.store slot ty operand)
+        lowered := lowered.push (.inr (slot, ty))
+      else lowered := lowered.push (.inl operand)
+    lowered.mapM fun
+      | .inl operand => pure operand
+      | .inr (slot, ty) => emitValue (.load · slot ty)
   -- Values cannot cross blocks, so both paths store the result in a temporary slot.
   shortCircuit (isAnd : Bool) (left right : Checked.Expr) : LowerM IR.Operand := do
     let slot ← fun _ builder => pure (builder.newSlot .bool)
@@ -101,10 +132,7 @@ mutual
     | .print ty value => emit (.print ty (← lowerExpr value))
     | .callVoid id arguments =>
       let some function := (← read).file.functions[id]? | throw lowerError
-      let mut lowered := #[]
-      for argument in arguments do
-        lowered := lowered.push (← lowerExpr argument)
-      emit (.callVoid function.name lowered)
+      emit (.callVoid function.name (← lowerExpr.lowerOperands arguments))
     | .discard value => discard (lowerExpr value)
     | .return value => terminate (.ret (← value.mapM lowerExpr))
     | .break => jump (isBreak := true)
