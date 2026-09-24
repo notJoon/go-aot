@@ -35,14 +35,17 @@ private def clangCommand : IO String :=
 
 -- Verify input SSA and every transformed module before code generation.
 private def llvmOptions : Array String :=
-  #["-O2", "-Wno-override-module", "-Xclang", "-llvm-verify-each"]
+  #["-Wno-override-module", "-Xclang", "-llvm-verify-each"]
 
-private def runLLVM (generated : String) : IO IO.Process.Output :=
+/-- IR that relies on poison or undefined behavior often works at only one of these levels. -/
+private def optimizationLevels : List String := ["-O0", "-O2"]
+
+private def runLLVM (generated : String) (level : String := "-O2") : IO IO.Process.Output :=
   IO.FS.withTempDir fun dir => do
     let sourcePath := dir / "program.ll"
     let exePath := dir / "program"
     IO.FS.writeFile sourcePath generated
-    let args := llvmOptions ++ #["-x", "ir", sourcePath.toString, "-o", exePath.toString]
+    let args := #[level] ++ llvmOptions ++ #["-x", "ir", sourcePath.toString, "-o", exePath.toString]
     let result ← IO.Process.output { cmd := ← clangCommand, args }
     unless result.exitCode == 0 do throw (IO.userError result.stderr)
     IO.Process.output { cmd := exePath.toString }
@@ -61,14 +64,16 @@ private def checkProgram (name : String) : IO Unit := do
   if ← System.FilePath.pathExists (path ++ ".ll.golden") then
     let golden ← IO.FS.readFile (path ++ ".ll.golden")
     check (generated == golden) s!"LLVM golden mismatch: {name}\n{generated}"
-  let output ← runLLVM generated
-  check (output.exitCode == 0 && output.stdout == expected) s!"wrong output: {name}: {repr output.stdout}"
+  for level in optimizationLevels do
+    let output ← runLLVM generated level
+    check (output.exitCode == 0 && output.stdout == expected)
+      s!"wrong output at {level}: {name}: {repr output.stdout}"
   if name == "hello" || name == "locals" then
     IO.FS.withTempDir fun dir => do
       let llvmPath := dir / "program.ll"
       let optimizedPath := dir / "optimized.ll"
       IO.FS.writeFile llvmPath generated
-      let optimizeArgs := llvmOptions ++ #["-S", "-emit-llvm", "-x", "ir", llvmPath.toString,
+      let optimizeArgs := #["-O2"] ++ llvmOptions ++ #["-S", "-emit-llvm", "-x", "ir", llvmPath.toString,
         "-o", optimizedPath.toString]
       discard <| IO.Process.run { cmd := ← clangCommand, args := optimizeArgs }
       let optimized ← IO.FS.readFile optimizedPath
@@ -128,7 +133,7 @@ private def checkInvalidSSARejected : IO Unit := do
     IO.FS.writeFile llvmPath (← IO.FS.readFile "Tests/Golden/invalid_ssa.ll")
     let result ← IO.Process.output {
       cmd := ← clangCommand
-      args := llvmOptions ++ #["-x", "ir", "-c", llvmPath.toString, "-o", objectPath.toString]
+      args := #["-O2"] ++ llvmOptions ++ #["-x", "ir", "-c", llvmPath.toString, "-o", objectPath.toString]
     }
     check (result.exitCode != 0) "LLVM verifier accepted invalid SSA"
 
@@ -140,9 +145,11 @@ private def checkPanics : IO Unit := do
       ("s := -1; println(1 << s)", "panic: runtime error: negative shift amount\n"),
       ("var s int8 = -1; println(uint8(1) >> s)", "panic: runtime error: negative shift amount\n")] do
     let source := Source.ofString s!"package main\nfunc main() \{ println(1); {body} }\n"
-    let output ← runLLVM (← compileOrThrow body source)
-    check (output.exitCode == 2 && output.stdout == "1\n" && output.stderr == message)
-      s!"wrong panic for {body}: {repr output.stdout} {repr output.stderr}"
+    let generated ← compileOrThrow body source
+    for level in optimizationLevels do
+      let output ← runLLVM generated level
+      check (output.exitCode == 2 && output.stdout == "1\n" && output.stderr == message)
+        s!"wrong panic at {level} for {body}: {repr output.stdout} {repr output.stderr}"
 
 private def checkDirectCFG : IO Unit := do
   let program : IR.Program := ⟨#[
@@ -166,11 +173,12 @@ def goldenMain : IO Unit := do
     if file.endsWith ".ll.golden" then
       pure ()
     else if file.endsWith ".out.golden" then
-      let name := (file.dropSuffix ".out.golden").copy
-      checkProgram name
-      programs := programs.push name
+      programs := programs.push (file.dropSuffix ".out.golden").copy
     else if file.endsWith ".golden" then
       checkGolden (file.dropSuffix ".golden").copy
+  -- Programs mostly wait on Clang and are independent, so they compile and run concurrently.
+  let runs ← programs.mapM fun name => IO.asTask (checkProgram name)
+  for run in runs do IO.ofExcept (← IO.wait run)
   checkDeadControlFlow "for_dead_control"
   checkDeadControlFlow "for_dead_after_loop"
   checkDeadControlFlow "for_dead_post"
