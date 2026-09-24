@@ -96,7 +96,7 @@ private def checkGoOracle (names : Array String) : IO Unit := do
     IO.println s!"Go oracle skipped: needs go1.26 or later, found '{version}'"
     return
   -- Out of range float conversions are implementation defined in Go, and this compiler follows
-  -- gc on arm64, so gc on another architecture prints something else for this program.
+  -- gc on arm64, so gc on another architecture prints something else for this program (#60).
   let arm64 := System.Platform.target.startsWith "aarch64" || System.Platform.target.startsWith "arm64"
   let names := if arm64 then names else names.filter (· != "float_conversion")
   -- Each `go run` mostly waits on the Go toolchain, so they run concurrently.
