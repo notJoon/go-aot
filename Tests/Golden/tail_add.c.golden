@@ -9,7 +9,7 @@ static int64_t go_bump(int64_t arg_n) {
   bb0: {
     slot_0 = arg_n;
     int64_t tmp_0 = slot_0;
-    int64_t tmp_1 = tmp_0 + 1;
+    int64_t tmp_1 = (int64_t)((uint64_t)tmp_0 + (uint64_t)1);
     return tmp_1;
   }
 }
@@ -31,9 +31,9 @@ static int64_t go_sum(int64_t arg_n) {
     int64_t tmp_4 = slot_0;
     int64_t tmp_5 = go_bump(tmp_4);
     int64_t tmp_6 = slot_0;
-    int64_t tmp_7 = tmp_6 - 1;
+    int64_t tmp_7 = (int64_t)((uint64_t)tmp_6 - (uint64_t)1);
     int64_t tmp_8 = go_sum(tmp_7);
-    int64_t tmp_9 = tmp_5 + tmp_8;
+    int64_t tmp_9 = (int64_t)((uint64_t)tmp_5 + (uint64_t)tmp_8);
     return tmp_9;
   }
 }

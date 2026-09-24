@@ -25,23 +25,27 @@ def VerifyError.render (error : VerifyError) : String := Id.run do
   if error.terminator then location := location ++ ", terminator"
   return s!"internal error: invalid IR{location}: {error.message}"
 
-@[inline] private def verifyOperand (function : Function) (values : Std.HashMap ValueId ValueKind)
-    (expected : ValueKind) (operand : Operand) : Except String Unit := do
-  let kind ← match operand with
+@[inline] private def verifyOperand (function : Function) (values : Std.HashMap ValueId Ty)
+    (expected : Ty) (operand : Operand) : Except String Unit := do
+  let ty ← match operand with
     | .value id => do
-      let some kind := values[id]?
+      let some ty := values[id]?
         | throw s!"value {id} is not defined earlier in this block"
-      pure kind
+      pure ty
     | .literal value => do
-      if value > maxSignedInt64 then
-        throw "integer literal exceeds signed 64-bit range"
-      pure .int
+      unless expected.isInteger do throw s!"expected {expected.name} operand"
+      unless expected.contains value do
+        throw s!"integer literal {value} is out of range for {expected.name}"
+      pure expected
+    | .floatLiteral value => do
+      unless value.isFinite do throw "float literal must be finite"
+      pure .float64
+    | .boolLiteral _ => pure .bool
     | .argument index => do
-      if index >= function.parameters.size then
-        throw s!"argument index {index} is out of range"
-      pure .int
-  if kind != expected then
-    throw (if expected == .int then "expected int operand" else "expected bool operand")
+      let some parameter := function.parameters[index]?
+        | throw s!"argument index {index} is out of range"
+      pure parameter.ty
+  if ty != expected then throw s!"expected {expected.name} operand"
 
 @[inline] private def verifyTarget (function : Function) (target : BlockId) : Except String Unit := do
   if target >= function.blocks.size then
@@ -52,9 +56,9 @@ def VerifyError.render (error : VerifyError) : String := Id.run do
 
 private structure BlockState where
   definitions : Std.HashSet ValueId
-  values : Std.HashMap ValueId ValueKind := {}
+  values : Std.HashMap ValueId Ty := {}
   /-- Slots declared so far in the entry block, retained when checking subsequent blocks. -/
-  slots : Std.HashMap SlotId ValueKind := {}
+  slots : Std.HashMap SlotId Ty := {}
 
 private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMap String Function) := do
   let mut functions : Std.HashMap String Function := {}
@@ -65,10 +69,11 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
       if functions.contains function.name then
         throw s!"duplicate function '{function.name}'"
       if function.name == "main" then
-        unless function.parameters.isEmpty && function.returnKind == .void do
+        unless function.parameters.isEmpty && function.results.isEmpty do
           throw "main must have no parameters or return value"
       let mut parameters : Std.HashSet String := {}
       for parameter in function.parameters do
+        let parameter := parameter.name
         unless validName parameter do
           throw s!"unsupported parameter name '{parameter}'"
         if parameters.contains parameter then
@@ -82,76 +87,85 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
   return functions
 
 @[inline] private def defineValue (state : BlockState) (result : ValueId)
-    (kind : ValueKind) : Except String BlockState := do
+    (ty : Ty) : Except String BlockState := do
   if state.definitions.contains result then
     throw s!"value {result} is defined more than once"
   return { state with
     definitions := state.definitions.insert result
-    values := state.values.insert result kind }
+    values := state.values.insert result ty }
 
 @[inline] private def verifySlot (state : BlockState) (slot : SlotId)
-    (kind : ValueKind) : Except String Unit := do
-  let some declaredKind := state.slots[slot]?
+    (ty : Ty) : Except String Unit := do
+  let some declaredTy := state.slots[slot]?
     | throw s!"slot {slot} is not declared earlier in the entry block"
-  if kind != declaredKind then throw s!"slot {slot} type mismatch"
+  if ty != declaredTy then throw s!"slot {slot} type mismatch"
+
+@[inline] private def verifyArguments (function : Function) (values : Std.HashMap ValueId Ty)
+    (callee : Function) (arguments : Array Operand) : Except String Unit := do
+  if arguments.size != callee.parameters.size then
+    throw s!"function '{callee.name}' expects {callee.parameters.size} arguments"
+  for argument in arguments, parameter in callee.parameters do
+    verifyOperand function values parameter.ty argument
 
 @[inline] private def verifyInstruction (functions : Std.HashMap String Function)
     (function : Function) (blockIndex : BlockId) (state : BlockState)
     (instruction : Instruction) : Except String BlockState := do
   match instruction with
-  | .alloca slot kind =>
+  | .alloca slot ty =>
     if blockIndex != 0 then throw "slots must be allocated in the entry block"
     if state.slots.contains slot then throw s!"slot {slot} is declared more than once"
-    return { state with slots := state.slots.insert slot kind }
-  | .load result slot kind =>
-    verifySlot state slot kind
-    defineValue state result kind
-  | .store slot kind value =>
-    verifySlot state slot kind
-    verifyOperand function state.values kind value
+    return { state with slots := state.slots.insert slot ty }
+  | .load result slot ty =>
+    verifySlot state slot ty
+    defineValue state result ty
+  | .store slot ty value =>
+    verifySlot state slot ty
+    verifyOperand function state.values ty value
     return state
-  | .binary result op left right =>
-    verifyOperand function state.values .int left
-    verifyOperand function state.values .int right
-    defineValue state result (match op with | .less => .bool | _ => .int)
-  | .call result name arguments =>
-    let some callee := functions[name]?
-      | throw s!"unknown function '{name}'"
-    if callee.returnKind != .int then
-      throw s!"function '{name}' does not return int"
-    if arguments.size != callee.parameters.size then
-      throw s!"function '{name}' expects {callee.parameters.size} arguments"
-    for argument in arguments do verifyOperand function state.values .int argument
-    defineValue state result .int
-  | .callVoid name arguments =>
+  | .binary result op ty left right =>
+    unless op.accepts ty do throw s!"operator is not defined on {ty.name}"
+    verifyOperand function state.values ty left
+    verifyOperand function state.values ty right
+    defineValue state result (if op.isComparison then .bool else ty)
+  | .shift result _ ty value countTy count =>
+    unless ty.isInteger && countTy.isInteger do throw "shift operands must be integers"
+    verifyOperand function state.values ty value
+    verifyOperand function state.values countTy count
+    defineValue state result ty
+  | .convert result source target value =>
+    unless source.isNumeric && target.isNumeric do
+      throw s!"cannot convert {source.name} to {target.name}"
+    verifyOperand function state.values source value
+    defineValue state result target
+  | .call results name arguments =>
     let some callee := functions[name]?
       | throw s!"unknown function '{name}'"
     if name == "main" then throw "cannot call 'main'"
-    if callee.returnKind != .void then
-      throw s!"function '{name}' does not return void"
-    if arguments.size != callee.parameters.size then
-      throw s!"function '{name}' expects {callee.parameters.size} arguments"
-    for argument in arguments do verifyOperand function state.values .int argument
+    if results.size != callee.results.size then
+      throw s!"call to '{name}' must define {callee.results.size} results"
+    verifyArguments function state.values callee arguments
+    let mut state := state
+    for result in results, ty in callee.results do
+      state ← defineValue state result ty
     return state
   | .printString _ => return state
-  | .printInt value =>
-    verifyOperand function state.values .int value
+  | .print ty value =>
+    verifyOperand function state.values ty value
     return state
 
 @[inline] private def verifyTerminator (function : Function)
-    (values : Std.HashMap ValueId ValueKind) (terminator : Terminator) : Except String Unit := do
+    (values : Std.HashMap ValueId Ty) (terminator : Terminator) : Except String Unit := do
   match terminator with
   | .br target => verifyTarget function target
   | .condBr condition ifTrue ifFalse =>
     verifyOperand function values .bool condition
     verifyTarget function ifTrue
     verifyTarget function ifFalse
-  | .ret value =>
-    match function.returnKind, value with
-    | .void, none => pure ()
-    | .int, some value => verifyOperand function values .int value
-    | .void, some _ => throw "void function cannot return a value"
-    | .int, none => throw "int function must return a value"
+  | .ret operands =>
+    if operands.size != function.results.size then
+      throw s!"return must have {function.results.size} operands"
+    for operand in operands, ty in function.results do
+      verifyOperand function values ty operand
 
 private def verifyBlock (functions : Std.HashMap String Function) (function : Function)
     (blockIndex : BlockId) (block : Block) (previous : BlockState) : Except VerifyError BlockState := do
@@ -166,8 +180,8 @@ private def verifyBlock (functions : Std.HashMap String Function) (function : Fu
   return state
 
 /--
-Checks function signatures, control flow, value definitions, and operand kinds.
-Slots must be declared once in the entry block before use, and accesses must match their kinds.
+Checks function signatures, control flow, value definitions, and operand types.
+Slots must be declared once in the entry block before use, and accesses must match their types.
 Slot initialization is the responsibility of lowering and is not checked here.
 Returns the first error with its function, block, and instruction or terminator location.
 -/

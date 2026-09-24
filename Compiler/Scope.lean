@@ -13,11 +13,11 @@ inductive SymbolKind where
   | local
   deriving BEq
 
-/-- A parameter or local binding, with its local ID, value kind, and declaration span. -/
+/-- A parameter or local binding, with its local ID, type, and declaration span. -/
 structure Symbol where
   kind : SymbolKind
   id : Checked.LocalId
-  valueKind : IR.ValueKind
+  ty : Ty
   span : Span
   deriving BEq
 
@@ -41,6 +41,10 @@ def Scope.enter (scope : Scope) : Scope :=
 /-- Returns the nearest binding of `name`, or `none` if no enclosing scope declares it. -/
 def Scope.find? (scope : Scope) (name : String) : Option Symbol :=
   scope.current.find? name <|> scope.parents.findSome? (·.find? name)
+
+/-- Returns the binding of `name` in the current scope only, ignoring enclosing scopes. -/
+def Scope.findHere? (scope : Scope) (name : String) : Option Symbol :=
+  scope.current.find? name
 
 /--
 Adds a binding to the current scope, allowing it to shadow an enclosing binding.

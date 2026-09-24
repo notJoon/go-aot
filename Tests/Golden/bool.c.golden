@@ -1,0 +1,90 @@
+#include <stdint.h>
+#include <stdio.h>
+
+static int64_t go_less(int64_t arg_a, int64_t arg_b);
+static int64_t go_not(int64_t arg_b);
+
+static int64_t go_less(int64_t arg_a, int64_t arg_b) {
+  int64_t slot_0;
+  int64_t slot_1;
+  bb0: {
+    slot_0 = arg_a;
+    slot_1 = arg_b;
+    int64_t tmp_0 = slot_0;
+    int64_t tmp_1 = slot_1;
+    int64_t tmp_2 = tmp_0 < tmp_1;
+    return tmp_2;
+  }
+}
+
+static int64_t go_not(int64_t arg_b) {
+  int64_t slot_0;
+  bb0: {
+    slot_0 = arg_b;
+    int64_t tmp_0 = slot_0;
+    if (tmp_0) goto bb1; else goto bb2;
+  }
+  bb1: {
+    return 0;
+  }
+  bb2: {
+    return 1;
+  }
+}
+
+int main(void) {
+  int64_t slot_0;
+  int64_t slot_1;
+  int64_t slot_2;
+  int64_t slot_3;
+  bb0: {
+    slot_0 = 0;
+    int64_t tmp_0 = slot_0;
+    int64_t tmp_1 = go_not(tmp_0);
+    if (tmp_1) goto bb1; else goto bb2;
+  }
+  bb1: {
+    printf("%lld\n", (long long)1);
+    goto bb2;
+  }
+  bb2: {
+    int64_t tmp_2 = go_less(1, 2);
+    slot_1 = tmp_2;
+    int64_t tmp_3 = slot_1;
+    if (tmp_3) goto bb3; else goto bb4;
+  }
+  bb3: {
+    printf("%lld\n", (long long)2);
+    goto bb4;
+  }
+  bb4: {
+    int64_t tmp_4 = go_not(1);
+    if (tmp_4) goto bb5; else goto bb6;
+  }
+  bb5: {
+    printf("%lld\n", (long long)3);
+    goto bb7;
+  }
+  bb6: {
+    printf("%lld\n", (long long)4);
+    goto bb7;
+  }
+  bb7: {
+    slot_2 = 0;
+    int64_t tmp_5 = go_less(2, 1);
+    slot_2 = tmp_5;
+    int64_t tmp_6 = slot_2;
+    int64_t tmp_7 = go_not(tmp_6);
+    if (tmp_7) goto bb8; else goto bb9;
+  }
+  bb8: {
+    printf("%lld\n", (long long)5);
+    goto bb9;
+  }
+  bb9: {
+    slot_3 = 6;
+    int64_t tmp_8 = slot_3;
+    printf("%lld\n", (long long)tmp_8);
+    return 0;
+  }
+}

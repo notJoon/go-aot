@@ -1,0 +1,35 @@
+#include <stdint.h>
+#include <stdio.h>
+
+struct go_split_results { int64_t r0; int64_t r1; };
+
+static struct go_split_results go_split(int64_t arg_n);
+
+static struct go_split_results go_split(int64_t arg_n) {
+  int64_t slot_0;
+  bb0: {
+    slot_0 = arg_n;
+    int64_t tmp_0 = slot_0;
+    int64_t tmp_1 = (int64_t)((uint64_t)tmp_0 - (uint64_t)1);
+    int64_t tmp_2 = slot_0;
+    int64_t tmp_3 = tmp_2 > 0;
+    return (struct go_split_results){tmp_1, tmp_3};
+  }
+}
+
+int main(void) {
+  int64_t slot_0;
+  int64_t slot_1;
+  bb0: {
+    struct go_split_results results_0 = go_split(3);
+    int64_t tmp_0 = results_0.r0;
+    int64_t tmp_1 = results_0.r1;
+    slot_0 = tmp_0;
+    slot_1 = tmp_1;
+    int64_t tmp_2 = slot_0;
+    printf("%lld\n", (long long)tmp_2);
+    int64_t tmp_3 = slot_1;
+    puts(tmp_3 ? "true" : "false");
+    return 0;
+  }
+}

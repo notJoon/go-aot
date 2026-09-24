@@ -149,13 +149,29 @@ private def checkInvalidSSARejected : IO Unit := do
     }
     check (result.exitCode != 0) "LLVM verifier accepted invalid SSA"
 
+-- Go prints this line first, followed by a goroutine trace this runtime does not have.
+private def checkPanics : IO Unit := do
+  let divide := "panic: runtime error: integer divide by zero\n"
+  for (body, message) in [("z := 0; println(1 / z)", divide), ("z := 0; println(1 % z)", divide),
+      ("var z uint64; println(1 / z)", divide), ("var z uint8; println(1 % z)", divide),
+      ("s := -1; println(1 << s)", "panic: runtime error: negative shift amount\n"),
+      ("var s int8 = -1; println(uint8(1) >> s)", "panic: runtime error: negative shift amount\n")] do
+    let source := Source.ofString s!"package main\nfunc main() \{ println(1); {body} }\n"
+    let .ok c := compileToC source | throw (IO.userError s!"C rejected {body}")
+    let .ok llvm := compileToLLVM source | throw (IO.userError s!"LLVM rejected {body}")
+    let outputs := #[← runGenerated (← ccCommand) "c" #["-std=c11", "-pedantic-errors"] c,
+      ← runGenerated (← clangCommand) "ir" llvmOptions llvm]
+    for output in outputs do
+      check (output.exitCode == 2 && output.stdout == "1\n" && output.stderr == message)
+        s!"wrong panic for {body}: {repr output.stdout} {repr output.stderr}"
+
 private def checkDirectCFG : IO Unit := do
   let program : IR.Program := ⟨#[
-    ⟨"main", #[], .void, #[⟨#[.call 0 "walk" #[], .printInt (.value 0)], .ret none⟩]⟩,
-    ⟨"walk", #[], .int, #[
+    ⟨"main", #[], #[], #[⟨#[.call #[0] "walk" #[], .print .int (.value 0)], .ret #[]⟩]⟩,
+    ⟨"walk", #[], #[.int], #[
       ⟨#[], .br 2⟩,
-      ⟨#[.printInt (.literal 11)], .ret (some (.literal 7))⟩,
-      ⟨#[.binary 0 .less (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
+      ⟨#[.print .int (.literal 11)], .ret #[(.literal 7)]⟩,
+      ⟨#[.binary 0 .less .int (.literal 1) (.literal 0)], .condBr (.value 0) 2 1⟩,
       ⟨#[], .br 3⟩]⟩]⟩
   let .ok () := IR.verify program | throw (IO.userError "valid cyclic CFG rejected")
   let c ← runGenerated (← ccCommand) "c" #["-O2", "-std=c11", "-pedantic-errors"] (Backend.C.emit program)
@@ -178,9 +194,7 @@ def goldenMain : IO Unit := do
     else if file.endsWith ".ll.golden" then
       checkLLVM (file.dropSuffix ".ll.golden").copy true
     else if file.endsWith ".out.golden" then
-      let name := (file.dropSuffix ".out.golden").copy
-      -- C signed overflow is undefined, so this fixture uses the LLVM oracle only.
-      if name == "overflow" then checkLLVM name else checkDifferential name
+      checkDifferential (file.dropSuffix ".out.golden").copy
     else if file.endsWith ".golden" then
       checkGolden (file.dropSuffix ".golden").copy
   checkDeadControlFlow "for_dead_control"
@@ -189,6 +203,7 @@ def goldenMain : IO Unit := do
   checkDirectCFG
   checkNulString
   checkInvalidSSARejected
+  checkPanics
   checkSameRejection "package main\nfunc main() { println(missing()) }\n"
   checkSameRejection "package main\nfunc f(n int) int { return n }\nfunc main() { println(f()) }\n"
   checkSameRejection "package main\nfunc main() { println(9223372036854775808) }\n"
@@ -203,8 +218,71 @@ def goldenMain : IO Unit := do
       ("package main\nfunc f(n int) int { return n }\nfunc main() { f(1 < 2) }\n",
         "3:17: function arguments must be int"),
       ("package main\nfunc main() { missing() }\n", "2:15: unknown function 'missing'"),
+      ("package main\nfunc main() { println(1 + true) }\n", "2:27: operator + is not defined on bool"),
+      ("package main\nfunc main() { println(1 / 0) }\n", "2:27: division by zero"),
+      ("package main\nfunc main() { println(1 % 0x0) }\n", "2:27: division by zero"),
+      ("package main\nfunc main() { println(1 == true) }\n",
+        "2:28: mismatched types untyped int and bool"),
+      ("package main\nfunc main() { if 1 && true {} }\n", "2:18: logical operands must be bool"),
+      ("package main\nfunc main() { if true || 1 {} }\n", "2:26: logical operands must be bool"),
+      ("package main\nfunc main() { println(-true) }\n", "2:24: operator - is not defined on bool"),
+      ("package main\nfunc main() { if !1 {} }\n", "2:19: operator ! is not defined on untyped int"),
+      ("package main\nfunc main() { println(true < false) }\n", "2:23: operator < is not defined on bool"),
+      ("package main\nfunc main() { println(true + 1) }\n", "2:23: operator + is not defined on bool"),
+      ("package main\nfunc f(b bool) bool { return b }\nfunc main() { f(1) }\n",
+        "3:17: function arguments must be bool"),
+      ("package main\nfunc f() bool { return 1 }\nfunc main() {}\n", "2:24: return value must be bool"),
+      ("package main\nfunc main() { var b bool = 1 }\n", "2:28: initializer must be bool"),
+      ("package main\nfunc main() { b := true; b = 1 }\n",
+        "2:30: assignment type does not match variable type"),
       ("package main\nfunc main() { main() }\n", "2:15: cannot call 'main'"),
-      ("package main\nfunc main() { println(1 < 2) }\n", "2:23: println supports only string and int"),
+      ("package main\nfunc main() { println(1 << 70) }\n", "2:23: constant 1180591620717411303424 overflows int"),
+      ("package main\nfunc main() { var x int8 = 200 }\n", "2:28: constant 200 overflows int8"),
+      ("package main\nfunc main() { var x uint8 = -1 }\n", "2:29: constant -1 overflows uint8"),
+      ("package main\nfunc main() { var x int = 2.5 }\n", "2:27: constant 2.5 truncated to int"),
+      ("package main\nfunc main() { println(1e400) }\n", "2:23: constant overflows float64"),
+      ("package main\nfunc main() { var a int8; var b int16; println(a + b) }\n",
+        "2:52: mismatched types int8 and int16"),
+      ("package main\nfunc main() { println(1.5 % 2) }\n", "2:23: operator % is not defined on untyped float"),
+      ("package main\nfunc main() { f := 1.5; println(f & 1) }\n", "2:33: operator & is not defined on float64"),
+      ("package main\nfunc main() { f := 1.5; println(f << 1) }\n",
+        "2:33: operator << is not defined on float64"),
+      ("package main\nfunc main() { println(1 << -1) }\n", "2:28: negative shift count"),
+      ("package main\nfunc main() { println(1 << 1.5) }\n", "2:28: constant 1.5 truncated to shift count"),
+      ("package main\nfunc main() { f := 1.5; println(f / 0.0) }\n", "2:37: division by zero"),
+      ("package main\nfunc main() { println(bool(1)) }\n", "2:28: cannot convert untyped int to bool"),
+      ("package main\nfunc main() { println(int(true)) }\n", "2:27: cannot convert bool to int"),
+      ("package main\nfunc main() { println(int8(1, 2)) }\n", "2:23: conversion to int8 expects one argument"),
+      ("package main\nfunc main() { println(0x1p-2) }\n",
+        "2:23: hexadecimal floating-point literals are unsupported"),
+      ("package main\nfunc f(s string) {}\nfunc main() {}\n", "2:10: unsupported type 'string'"),
+      ("package main\nfunc f() (x int) {}\nfunc main() {}\n", "2:13: named results are unsupported"),
+      ("package main\nfunc f() (int, int) { return 1 }\nfunc main() {}\n",
+        "2:23: not enough return values in function 'f'"),
+      ("package main\nfunc f() (int, int) { return 1, true }\nfunc main() {}\n",
+        "2:33: return value must be int"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { x := f() }\n",
+        "3:20: multiple-value f() in single-value context"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { println(f()) }\n",
+        "3:23: multiple-value f() in single-value context"),
+      ("package main\nfunc g() int { return 1 }\nfunc main() { a, b := g() }\n",
+        "3:23: assignment mismatch: 2 variables but g() returns 1 value"),
+      ("package main\nfunc main() { a, b := 1 }\n",
+        "2:23: assignment mismatch: 2 variables but 1 value"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { a, b := f(); a, b := f() }\n",
+        "3:28: no new variables on left side of :="),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { _, _ := f() }\n",
+        "3:15: no new variables on left side of :="),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { a, a := f() }\n",
+        "3:18: 'a' repeated on left side of :="),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { a, b = f() }\n",
+        "3:15: unknown identifier 'a'"),
+      ("package main\nfunc f() (int, int) { return 1, 2 }\nfunc main() { var a bool; a, b := f() }\n",
+        "3:27: assignment type does not match variable type"),
+      ("package main\nfunc g() (int, int) { return 1, 2 }\nfunc f() (int, bool) { return g() }\nfunc main() {}\n",
+        "3:31: results of g() do not match the results of function 'f'"),
+      ("package main\nfunc main() (int, int) { return 1, 2 }\n",
+        "2:1: main must have no parameters or return value"),
       ("package main\nfunc f() int { return 1 < 2 }\nfunc main() {}\n", "2:23: return value must be int"),
       ("package main\nfunc f() int { return }\nfunc main() {}\n",
         "2:16: function 'f' must return a value"),
@@ -221,8 +299,8 @@ def goldenMain : IO Unit := do
       ("package main\nfunc f(g int) int { g(1); return 1 }\nfunc main() {}\n",
         "2:21: cannot call non-function 'g'")] do
     checkSameRejection source
-    check (match compileToC (Source.ofString source) with
-      | .error diagnostic => diagnostic.render (Source.ofString source) == expected
-      | .ok _ => false)
-      s!"wrong lowering error: {source}"
+    let actual := match compileToC (Source.ofString source) with
+      | .error diagnostic => diagnostic.render (Source.ofString source)
+      | .ok _ => "no error"
+    check (actual == expected) s!"wrong lowering error: {source}expected: {expected}\nactual: {actual}"
   IO.println "Go parser and AOT tests: OK"

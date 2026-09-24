@@ -14,7 +14,7 @@ private def failsWith (result : Except Diagnostic α) (expected : Diagnostic) : 
   let source := Source.ofString (before ++ literal ++ ") }\n")
   let expected : Diagnostic := ⟨.lowering,
     some ⟨before.utf8ByteSize, before.utf8ByteSize + literal.utf8ByteSize⟩,
-    "integer literal exceeds signed 64-bit range"⟩
+    "constant 9223372036854775808 overflows int"⟩
   failsWith (parse source >>= Check.check) expected &&
     failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
 
@@ -84,7 +84,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
 #guard [
     ("var x ", "}", "", "expected variable type"),
     ("var x ", "=", " 1 }", "var declarations without an explicit type are unsupported"),
-    ("a", ",", " b := 1, 2 }", "multiple variable declarations and assignments are unsupported"),
+    ("a, b := 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
     ("x ", "+=", " 1 }", "compound assignments are unsupported"),
     ("x", "++", " }", "increment and decrement statements are unsupported"),
     ("x", "--", " }", "increment and decrement statements are unsupported"),
@@ -92,6 +92,7 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
     ("x := 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
     ("x = 1", ",", " 2 }", "multiple variable declarations and assignments are unsupported"),
     ("println(1)", ",", " 2 }", "expected semicolon"),
+    ("for i := 0; i < 1; a, b := f() ", "{", "} }", "for post statement cannot declare a variable"),
     ("x := ", "}", "", "expected expression"),
     ("", "f", "() = 1 }", "assignment target must be an identifier"),
     ("", "1", " = 2 }", "assignment target must be an identifier")].all
@@ -118,14 +119,13 @@ private def utf8Expected : Diagnostic := ⟨.lowering,
       some ⟨before.utf8ByteSize, before.utf8ByteSize + token.utf8ByteSize⟩, message⟩
     failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
 
--- A comma after a return value is not a variable declaration or assignment error.
+-- Extra return values are reported at the first value beyond the declared results.
 #guard
-  let before := "package main\nfunc f() int { return 1"
-  let source := Source.ofString (before ++ ", 2 }\nfunc main() {}")
-  let expected : Diagnostic := ⟨.parser,
-    some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "expected semicolon"⟩
-  failsWith (parse source) expected && failsWith (compileToC source) expected &&
-    failsWith (compileToLLVM source) expected
+  let before := "package main\nfunc f() int { return 1, "
+  let source := Source.ofString (before ++ "2 }\nfunc main() {}")
+  let expected : Diagnostic := ⟨.lowering,
+    some ⟨before.utf8ByteSize, before.utf8ByteSize + 1⟩, "too many return values in function 'f'"⟩
+  failsWith (compileToC source) expected && failsWith (compileToLLVM source) expected
 
 #guard [
     ("break", "break outside loop"),

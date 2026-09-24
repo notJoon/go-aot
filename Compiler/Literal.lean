@@ -31,6 +31,68 @@ def decodeInt (literal : String.Slice) : Nat := Id.run do
     if c == '_' then value else value * base + digitValue c) 0
 
 /--
+Decode a decimal floating-point literal already validated by the lexer into its exact value.
+Returns `none` for hexadecimal literals.
+Example: `decodeFloat? "1_0.5e-1" = some (21 / 20)`.
+-/
+def decodeFloat? (literal : String.Slice) : Option Rat := Id.run do
+  if literal.startsWith "0x" || literal.startsWith "0X" then return none
+  let mut mantissa := 0
+  let mut scale : Int := 0
+  let mut fraction := false
+  let mut inExponent := false
+  let mut exponentNegative := false
+  let mut exponent : Int := 0
+  for c in literal.copy.toList do
+    if c == '_' || c == '+' then continue
+    if inExponent then
+      if c == '-' then exponentNegative := true
+      else exponent := exponent * 10 + (digitValue c : Int)
+    else if c == '.' then fraction := true
+    else if c == 'e' || c == 'E' then inExponent := true
+    else
+      mantissa := mantissa * 10 + digitValue c
+      if fraction then scale := scale - 1
+  let power := scale + (if exponentNegative then -exponent else exponent)
+  return some (OfScientific.ofScientific mantissa (power < 0) power.natAbs)
+
+/--
+The float64 nearest to `value`, with ties to even, as Go converts an untyped constant.
+Values beyond the largest finite float64 become an infinity.
+Example: `toFloat (3 / 10) = 0.3`.
+-/
+def toFloat (value : Rat) : Float := Id.run do
+  let numerator := value.num.natAbs
+  let denominator := value.den
+  if numerator == 0 then return 0
+  -- `numerator / denominator` lies in (2^(k - 1), 2^(k + 1)) for k = log2 numerator - log2 denominator.
+  let divide (exponent : Int) : Nat × Nat × Nat :=
+    let scaled := if exponent < 0 then numerator * 2 ^ exponent.natAbs else numerator
+    let divisor := if exponent < 0 then denominator else denominator * 2 ^ exponent.natAbs
+    (scaled / divisor, scaled % divisor, divisor)
+  let mut exponent : Int := max ((numerator.log2 : Int) - denominator.log2 - 53) (-1074)
+  let mut (quotient, remainder, divisor) := divide exponent
+  if quotient ≥ 2 ^ 53 then
+    exponent := exponent + 1
+    (quotient, remainder, divisor) := divide exponent
+  if 2 * remainder > divisor || (2 * remainder == divisor && quotient % 2 == 1) then
+    quotient := quotient + 1
+  if quotient == 2 ^ 53 then
+    quotient := 2 ^ 52
+    exponent := exponent + 1
+  -- The quotient has at most 53 bits, so scaling it by a power of two is exact.
+  let magnitude := if exponent > 971 then 1 / 0 else (Float.ofNat quotient).scaleB exponent
+  return if value.num < 0 then -magnitude else magnitude
+
+#guard [("0.1", 0.1), ("0.3", 0.3), ("1e-5", 1e-5), ("123456789.0", 123456789.0),
+    ("1.7976931348623157e308", 1.7976931348623157e308), ("5e-324", 5e-324), ("2.5e-324", 5e-324),
+    ("2.4e-324", 0), ("2.2250738585072011e-308", 2.2250738585072011e-308),
+    ("9007199254740993", 9007199254740992), ("9007199254740995", 9007199254740996)].all
+  fun (text, expected) => (decodeFloat? text.toSlice).map toFloat == some expected
+#guard toFloat (1 / 10 + 2 / 10) == 0.3 && toFloat (-3 / 2) == -1.5
+#guard (toFloat (OfScientific.ofScientific 18 false 307)).isInf
+
+/--
 A numeric escape's radix, digit width, and completion rule.
 -/
 inductive EscapeKind where

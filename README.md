@@ -36,6 +36,33 @@ The LLVM backend emits target independent LLVM IR and asks Clang to optimize,
 generate host machine code, and link it. After the correctness and benchmark gates
 are complete, LLVM becomes the only backend and the C backend is removed.
 
+Values are `bool`, `int`, `int8` to `int64`, `uint`, `uint8` to `uint64`, and `float64`.
+Functions can return several results. [docs/ABI.md](docs/ABI.md) records how each backend
+represents values, parameters, and results.
+
+Untyped constants are exact, as in Go, and take their type from the context or default to
+`int` or `float64`. A constant that overflows its type or truncates a fraction is a compile
+error. Expressions on typed constants, such as `int8(100) * 2`, are not folded, so they wrap at
+run time where Go reports an overflow. Hexadecimal float literals and the `byte` and `rune`
+aliases are not supported yet.
+
+Integer arithmetic wraps at the width of its type in both backends. C computes `+`, `-`, `*`,
+and bitwise operators on `uint64_t` and converts back, because C leaves signed overflow undefined.
+Division and remainder follow Go. Dividing by a constant zero is a compile error. Dividing by
+zero at run time flushes stdout, writes `panic: runtime error: integer divide by zero` to
+stderr, and exits with status 2. Go also prints a goroutine trace, which this runtime does not
+have. The most negative value divided by -1 wraps to itself with remainder 0. A shift by a
+count at or above the width gives 0, or -1 for a negative signed value shifted right, and a
+negative count panics with `panic: runtime error: negative shift amount`.
+
+Converting a float to an integer truncates toward zero. Go leaves out of range results to the
+implementation. Like gc on arm64, both backends saturate at the target range, NaN becomes 0,
+and a target narrower than 32 bits saturates at 32 bits and then truncates, so `uint8(300.0)`
+is 44.
+
+`println` prints a float64 as Go does, the shortest digits that round trip in `%e` form when the
+exponent is below -4 or at least 6: `0.3`, `1.23456789e+08`, `-0`, `+Inf`, `NaN`.
+
 The LLVM backend invokes `clang -O2 -x ir`; generated IR contains no hard-coded target
 triple or data layout. The temporary C backend uses the system `cc`.
 
