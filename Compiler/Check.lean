@@ -16,7 +16,7 @@ private def diagnosticAt (span : Span) (message : String) : Diagnostic :=
 private structure Signature where
   id : Checked.FunctionId
   name : String
-  parameters : Array IR.Parameter
+  parameters : Array Parameter
   results : Array Ty
   -- Retain parameter bindings for lookup and duplicate declarations in the body.
   scope : Scope
@@ -148,7 +148,7 @@ private def bitwise (op : Nat → Nat → Nat) (left right : Int) : Int :=
   let result : Int := (op (left % modulus).toNat (right % modulus).toNat : Nat)
   if result ≥ modulus / 2 then result - modulus else result
 
-private def irOp? : Syntax.BinaryOp → Option IR.Op
+private def checkedOp? : Syntax.BinaryOp → Option Op
   | .add => some .add | .subtract => some .subtract | .multiply => some .multiply
   | .divide => some .divide | .remainder => some .remainder
   -- `x &^ y` lowers to `x & ^y`.
@@ -284,7 +284,7 @@ mutual
 
   private partial def checkBinary (hint : Option Ty) (op : Syntax.BinaryOp)
       (left right : Syntax.Expr) (span : Span) : ExprM Value := do
-    match op, irOp? op with
+    match op, checkedOp? op with
     | .and, _ | .or, _ =>
       let (left', leftTy) ← checkTyped Ty.bool left
       unless leftTy == .bool do throw (diagnosticAt left.span "logical operands must be bool")
@@ -292,20 +292,20 @@ mutual
       unless rightTy == .bool do throw (diagnosticAt right.span "logical operands must be bool")
       return .typed (if op == .and then .and left' right' else .or left' right') .bool
     | _, none => checkShift hint op left right span
-    | _, some irOp =>
+    | _, some checkedOp =>
       -- Comparison results are bools, so their operands have no type from context.
-      let operandHint := if irOp.isComparison then none else hint
+      let operandHint := if checkedOp.isComparison then none else hint
       let leftValue ← checkValue operandHint left
       let rightValue ← checkValue operandHint right
       -- An operand whose type rejects the operator is reported where it appears. A constant
       -- takes the other operand's type, or with another constant the later kind of int, float.
       for (operand, value) in [(left, leftValue), (right, rightValue)] do
         if let .typed _ ty := value then
-          unless irOp.accepts ty do
+          unless checkedOp.accepts ty do
             throw (diagnosticAt operand.span s!"operator {op.symbol} is not defined on {ty.name}")
       if leftValue.isConst && rightValue.isConst then
         let float := leftValue matches .float _ || rightValue matches .float _
-        unless irOp.accepts (if float then .float64 else .int) do
+        unless checkedOp.accepts (if float then .float64 else .int) do
           throw (diagnosticAt span s!"operator {op.symbol} is not defined on untyped float")
       let mismatch := diagnosticAt right.span
         s!"mismatched types {leftValue.typeName} and {rightValue.typeName}"
@@ -320,15 +320,15 @@ mutual
           unless ty.isNumeric do throw mismatch
           pure (← constTo constant ty left.span, right', ty)
         | a, b => return ← foldConst op a b right.span
-      if irOp == .divide || irOp == .remainder then
+      if checkedOp == .divide || checkedOp == .remainder then
         if right' matches .intLiteral 0 || right' matches .floatLiteral 0 then
           throw (diagnosticAt right.span "division by zero")
       let right' := if op == .bitClear then .binary .bitXor ty right' (allOnes ty) else right'
-      return .typed (.binary irOp ty left' right') (if irOp.isComparison then .bool else ty)
+      return .typed (.binary checkedOp ty left' right') (if checkedOp.isComparison then .bool else ty)
 
   private partial def checkShift (hint : Option Ty) (op : Syntax.BinaryOp)
       (left right : Syntax.Expr) (span : Span) : ExprM Value := do
-    let shift : IR.ShiftOp := if op == .shiftLeft then .left else .right
+    let shift : ShiftOp := if op == .shiftLeft then .left else .right
     let leftValue ← checkValue hint left
     let count ← checkValue none right
     let countValue? ← match count with

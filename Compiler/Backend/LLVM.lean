@@ -97,7 +97,7 @@ private def emitArguments (output : String) (callee : Option IR.Function)
     output := emitOperand (output ++ llvmType ty ++ " ") ty arguments[index]
   return output ++ ")\n"
 
-private def emitBinary (output : String) (id : IR.ValueId) (op : IR.Op) (ty : Ty)
+private def emitBinary (output : String) (id : IR.ValueId) (op : Op) (ty : Ty)
     (left right : IR.Operand) : String :=
   let name := "%v" ++ toString id
   let type := llvmType ty
@@ -135,7 +135,7 @@ private def emitBinary (output : String) (id : IR.ValueId) (op : IR.Op) (ty : Ty
 
 -- `shl`, `lshr`, and `ashr` are poison for a count at or above the width, so the count is
 -- clamped first and the Go result for large counts selected afterwards.
-private def emitShift (output : String) (id : IR.ValueId) (op : IR.ShiftOp) (ty : Ty)
+private def emitShift (output : String) (id : IR.ValueId) (op : ShiftOp) (ty : Ty)
     (value : IR.Operand) (countTy : Ty) (count : IR.Operand) : String := Id.run do
   let name := "%v" ++ toString id
   let type := llvmType ty

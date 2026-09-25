@@ -1,6 +1,6 @@
 module
 
-public import Compiler.Types
+public import Compiler.Operator
 
 public section
 
@@ -20,45 +20,6 @@ inductive Operand where
   | floatLiteral (value : Float)
   | boolLiteral (value : Bool)
   | argument (index : Nat)
-  deriving BEq
-
-inductive Op where
-  | add
-  | subtract
-  | multiply
-  /-- Go division: panics on a zero divisor and wraps the most negative value divided by -1. -/
-  | divide
-  /-- Go remainder, with the sign of the dividend and the same zero and -1 rules as `divide`. -/
-  | remainder
-  | bitAnd
-  | bitOr
-  | bitXor
-  | equal
-  | notEqual
-  | less
-  | lessEqual
-  | greater
-  | greaterEqual
-  deriving BEq
-
-def Op.isComparison : Op → Bool
-  | .equal | .notEqual | .less | .lessEqual | .greater | .greaterEqual => true
-  | _ => false
-
-/-- Whether `op` is defined on operands of type `ty`. -/
-def Op.accepts (op : Op) (ty : Ty) : Bool :=
-  match op with
-  | .equal | .notEqual => true
-  | .add | .subtract | .multiply | .divide | .less | .lessEqual | .greater | .greaterEqual =>
-    ty.isNumeric
-  | .remainder | .bitAnd | .bitOr | .bitXor => ty.isInteger
-
-/--
-Go shifts. A count at or above the width yields 0, or -1 for `right` on a negative signed value.
--/
-inductive ShiftOp where
-  | left
-  | right
   deriving BEq
 
 abbrev BlockId := Nat
@@ -100,11 +61,6 @@ inductive Terminator where
 structure Block where
   instructions : Array Instruction
   terminator : Terminator
-
-structure Parameter where
-  -- Display name only. Argument operands use indices, and lowering copies parameters into slots.
-  name : String
-  ty : Ty
 
 structure Function where
   name : String
