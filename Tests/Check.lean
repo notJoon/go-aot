@@ -26,15 +26,6 @@ private def checked (text : String) : Option Checked.File :=
     | _, _ => false
   | none => false
 
-#guard [
-    ("func f() int { return 1; println(missing) }; func main() {}", "unknown identifier 'missing'"),
-    ("func f() int { return 1; for { break; println(1 + true) } }; func main() {}",
-      "operator + is not defined on bool"),
-    ("func main() { x := x }", "unknown identifier 'x'")].all fun (body, message) =>
-  match parse (Source.ofString ("package main\n" ++ body)) >>= Check.check with
-  | .error error => error.phase == .lowering && error.message == message
-  | .ok _ => false
-
 #guard match checked "package main\nfunc main() { var x int; x = 1 }" with
   | some file => match file.functions[0]?.map (·.body) with
     | some #[Checked.Stmt.declare 0 (.intLiteral 0), .assign 0 (.intLiteral 1)] => true

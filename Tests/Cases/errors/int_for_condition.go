@@ -3,7 +3,7 @@
 package main
 
 func main() {
-	if 1 { // ERROR 5 "if condition must be bool"
+	for 1 { // ERROR 6 "for condition must be bool"
 		println(2)
 	}
 }

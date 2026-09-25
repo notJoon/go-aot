@@ -3,8 +3,8 @@
 `lake test` builds the test driver, then runs every test case and prints each failure followed by a
 summary. It exits with status 1 when a case fails.
 
-* **`#guard` checks.** These are in `Tests/*.lean` and run while the driver builds. A failing
-  guard is a build error.
+* **Lean checks.** `#guard` and `#guard_msgs` in `Tests/*.lean` run while the driver builds, so a
+  failure is a build error.
 * **Cases.** These are files under `Tests/Cases`, described below.
 * **gc comparisons.** Each `run` case is also run with `go run`. gc must print exactly its
   `.out` file, because the expected output of every program is gc's.
@@ -64,3 +64,17 @@ not decide what a case checks; its directives do.
 
 `Tests/Fixtures` holds inputs that are not Go programs, such as invalid LLVM IR the toolchain
 must reject.
+
+## Lean checks
+
+A behavior that a Go program can show belongs in a case, including every diagnostic reported for a
+source program. `Tests/*.lean` holds what a program cannot reach:
+
+* internal interfaces, such as scopes, the lexer and its semicolon insertion, hand-built IR for the
+  verifier, and the LLVM emitter's text;
+* the phase that reports an error through each entry point;
+* how far a diagnostic's span reaches.
+
+Tables use `#guard_msgs`. An `#eval` prints one line per entry, and the docstring above it holds the
+expected lines, so a failure shows a diff of the lines that changed. When a change is intended, the
+editor's code action on the failing `#guard_msgs` replaces the docstring with the new output.
