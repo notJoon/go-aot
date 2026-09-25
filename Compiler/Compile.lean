@@ -3,7 +3,7 @@ module
 public import Compiler.Diagnostic
 import Compiler.Backend.LLVM
 import Compiler.Lowering
-import Compiler.Parser.Go
+import Compiler.Parser
 import Compiler.Check
 import Compiler.IR.Verify
 

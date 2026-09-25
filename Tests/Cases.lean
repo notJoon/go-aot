@@ -1,5 +1,5 @@
 import GoAot
-import Compiler.Parser.Go
+import Compiler.Parser
 import Compiler.IR.Verify
 import Compiler.Backend.LLVM
 import Tests.Harness

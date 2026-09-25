@@ -1,6 +1,6 @@
 module
 
-public import Compiler.Parser.Parser
+public import Compiler.Parsec
 
 public section
 

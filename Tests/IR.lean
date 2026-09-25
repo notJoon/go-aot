@@ -1,4 +1,4 @@
-import Compiler.Parser.Go
+import Compiler.Parser
 import Compiler.Lowering
 import Compiler.Check
 import Compiler.Backend.LLVM

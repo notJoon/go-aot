@@ -1,8 +1,8 @@
 module
 
 public import Compiler.Diagnostic
-public import Compiler.Parser.Parser
-public import Compiler.Parser.String
+public import Compiler.Parsec
+public import Compiler.Parsec.String
 import Compiler.Literal
 import Compiler.Unicode
 
