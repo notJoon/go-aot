@@ -1,3 +1,4 @@
+import Compiler.Parser.Go
 import Compiler.Lowering
 import Compiler.Check
 import Compiler.IR.Verify

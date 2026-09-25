@@ -2,7 +2,7 @@ module
 
 public import Compiler.Checked
 public import Compiler.Scope
-public import Compiler.Parser.Go
+public import Compiler.Syntax
 import Compiler.Literal
 import Std.Data.HashMap
 

@@ -1,3 +1,4 @@
+import Compiler.Parser.Go
 import Compiler.Check
 
 open GoAot
