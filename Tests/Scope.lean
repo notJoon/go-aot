@@ -29,9 +29,9 @@ private def inner : Scope :=
 
 -- Only the current scope rejects a duplicate, with a message that depends on the new binding.
 /--
-info: parameter in outer: lowering some { start := 30, stop := 31 }: duplicate parameter 'x'
-local in outer: lowering some { start := 30, stop := 31 }: duplicate declaration 'x'
-local in inner: lowering some { start := 30, stop := 31 }: duplicate declaration 'x'
+info: parameter in outer: check some { start := 30, stop := 31 }: duplicate parameter 'x'
+local in outer: check some { start := 30, stop := 31 }: duplicate declaration 'x'
+local in inner: check some { start := 30, stop := 31 }: duplicate declaration 'x'
 -/
 #guard_msgs in
 #eval show IO Unit from do

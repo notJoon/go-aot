@@ -2,7 +2,8 @@ module
 
 public import Compiler.Checked
 public import Compiler.Scope
-public import Compiler.Parser.Go
+public import Compiler.Syntax
+import Compiler.Check.Const
 import Compiler.Literal
 import Std.Data.HashMap
 
@@ -10,13 +11,10 @@ public section
 
 namespace GoAot.Check
 
-private def diagnosticAt (span : Span) (message : String) : Diagnostic :=
-  ⟨.lowering, some span, message⟩
-
 private structure Signature where
   id : Checked.FunctionId
   name : String
-  parameters : Array IR.Parameter
+  parameters : Array Parameter
   results : Array Ty
   -- Retain parameter bindings for lookup and duplicate declarations in the body.
   scope : Scope
@@ -65,90 +63,7 @@ private def checkCallable (scope : Scope) (name : String) (span : Span) : Except
   if (scope.find? name).isSome then
     throw (diagnosticAt span s!"cannot call non-function '{name}'")
 
-/--
-A checked operand. Untyped constants are exact, like Go's, and stay untyped until their context
-gives them a type. A float constant rounds to float64 only then, so `0.1 + 0.2` is `0.3`.
--/
-private inductive Value where
-  | int (value : Int)
-  | float (value : Rat)
-  | typed (expr : Checked.Expr) (ty : Ty)
-
-private def Value.isConst : Value → Bool
-  | .typed .. => false
-  | _ => true
-
-private def Value.typeName : Value → String
-  | .int _ => "untyped int"
-  | .float _ => "untyped float"
-  | .typed _ ty => ty.name
-
-/-- The type of a typed value, or the type a constant takes when its context has none. -/
-private def Value.defaultTy : Value → Ty
-  | .int _ => .int
-  | .float _ => .float64
-  | .typed _ ty => ty
-
-private def Value.toRat : Value → Rat
-  | .int value => value
-  | .float value => value
-  | .typed .. => 0
-
-private def Value.render : Value → String
-  | .int value => toString value
-  | .float value =>
-    -- Lean prints six fractional digits, which the trailing zero trim shortens to Go's spelling.
-    let text := toString (Literal.toFloat value)
-    if text.contains '.' then ((text.dropEndWhile '0').dropEndWhile '.').copy else text
-  | .typed _ ty => ty.name
-
-private def zeroValue (ty : Ty) : Checked.Expr :=
-  match ty.kind with
-  | .bool => .boolLiteral false
-  | .float => .floatLiteral 0
-  | .signed | .unsigned => .intLiteral 0
-
-/-- The value with every bit set, used for `^x` and `x &^ y`. -/
-private def allOnes (ty : Ty) : Checked.Expr :=
-  .intLiteral (if ty.isSigned then -1 else ty.maxValue)
-
-private def constInteger (value : Value) (span : Span) (target : String) : Except Diagnostic Int :=
-  match value with
-  | .int integer => pure integer
-  | .typed .. => throw (diagnosticAt span "internal error: expected a constant")
-  | .float exact =>
-    if exact.den != 1 then throw (diagnosticAt span s!"constant {value.render} truncated to {target}")
-    else pure exact.num
-
-private def floatTo (exact : Rat) (span : Span) : Except Diagnostic Checked.Expr := do
-  let float := Literal.toFloat exact
-  unless float.isFinite do throw (diagnosticAt span "constant overflows float64")
-  return .floatLiteral float
-
-private def intTo (integer : Int) (ty : Ty) (span : Span) : Except Diagnostic Checked.Expr := do
-  if ty.kind == .float then return ← floatTo integer span
-  unless ty.contains integer do throw (diagnosticAt span s!"constant {integer} overflows {ty.name}")
-  return .intLiteral integer
-
-/--
-Represent a constant as the numeric type `ty`, as an assignment or an explicit conversion does.
-Every numeric type accepts a numeric constant unless the value overflows or truncates.
--/
-private def constTo (value : Value) (ty : Ty) (span : Span) : Except Diagnostic Checked.Expr := do
-  match value, ty.kind with
-  | .typed expr _, _ => return expr
-  | .int integer, _ => intTo integer ty span
-  | .float exact, .float => floatTo exact span
-  | .float _, _ => intTo (← constInteger value span ty.name) ty span
-
-/-- Apply a bitwise `Nat` operation to integers in two's complement. -/
-private def bitwise (op : Nat → Nat → Nat) (left right : Int) : Int :=
-  let width := (max left.natAbs right.natAbs).log2 + 2
-  let modulus : Int := (2 ^ width : Nat)
-  let result : Int := (op (left % modulus).toNat (right % modulus).toNat : Nat)
-  if result ≥ modulus / 2 then result - modulus else result
-
-private def irOp? : Syntax.BinaryOp → Option IR.Op
+private def checkedOp? : Syntax.BinaryOp → Option Op
   | .add => some .add | .subtract => some .subtract | .multiply => some .multiply
   | .divide => some .divide | .remainder => some .remainder
   -- `x &^ y` lowers to `x & ^y`.
@@ -157,38 +72,6 @@ private def irOp? : Syntax.BinaryOp → Option IR.Op
   | .less => some .less | .lessEqual => some .lessEqual
   | .greater => some .greater | .greaterEqual => some .greaterEqual
   | .and | .or | .shiftLeft | .shiftRight => none
-
-/-- Fold an operator the operands' default types accept. Comparisons produce a typed bool. -/
-private def foldConst (op : Syntax.BinaryOp) (left right : Value) (rightSpan : Span) :
-    Except Diagnostic Value := do
-  let divisionByZero := diagnosticAt rightSpan "division by zero"
-  let compare (ordering : Ordering) : Value :=
-    .typed (.boolLiteral (match op with
-      | .equal => ordering == .eq | .notEqual => ordering != .eq
-      | .less => ordering == .lt | .lessEqual => ordering != .gt
-      | .greater => ordering == .gt | _ => ordering != .lt)) .bool
-  match left, right with
-  | .int a, .int b =>
-    match op with
-    | .add => return .int (a + b)
-    | .subtract => return .int (a - b)
-    | .multiply => return .int (a * b)
-    | .divide => if b == 0 then throw divisionByZero else return .int (a.tdiv b)
-    | .remainder => if b == 0 then throw divisionByZero else return .int (a.tmod b)
-    | .bitAnd => return .int (bitwise (· &&& ·) a b)
-    | .bitOr => return .int (bitwise (· ||| ·) a b)
-    | .bitXor => return .int (bitwise (· ^^^ ·) a b)
-    | .bitClear => return .int (bitwise (· &&& ·) a (-b - 1))
-    | _ => return compare (compareOfLessAndEq a b)
-  | _, _ =>
-    let a := left.toRat
-    let b := right.toRat
-    match op with
-    | .add => return .float (a + b)
-    | .subtract => return .float (a - b)
-    | .multiply => return .float (a * b)
-    | .divide => if b == 0 then throw divisionByZero else return .float (a / b)
-    | _ => return compare (if a < b then .lt else if a == b then .eq else .gt)
 
 mutual
   private partial def checkValue (hint : Option Ty) : Syntax.Expr → ExprM Value
@@ -284,7 +167,7 @@ mutual
 
   private partial def checkBinary (hint : Option Ty) (op : Syntax.BinaryOp)
       (left right : Syntax.Expr) (span : Span) : ExprM Value := do
-    match op, irOp? op with
+    match op, checkedOp? op with
     | .and, _ | .or, _ =>
       let (left', leftTy) ← checkTyped Ty.bool left
       unless leftTy == .bool do throw (diagnosticAt left.span "logical operands must be bool")
@@ -292,20 +175,20 @@ mutual
       unless rightTy == .bool do throw (diagnosticAt right.span "logical operands must be bool")
       return .typed (if op == .and then .and left' right' else .or left' right') .bool
     | _, none => checkShift hint op left right span
-    | _, some irOp =>
+    | _, some checkedOp =>
       -- Comparison results are bools, so their operands have no type from context.
-      let operandHint := if irOp.isComparison then none else hint
+      let operandHint := if checkedOp.isComparison then none else hint
       let leftValue ← checkValue operandHint left
       let rightValue ← checkValue operandHint right
       -- An operand whose type rejects the operator is reported where it appears. A constant
       -- takes the other operand's type, or with another constant the later kind of int, float.
       for (operand, value) in [(left, leftValue), (right, rightValue)] do
         if let .typed _ ty := value then
-          unless irOp.accepts ty do
+          unless checkedOp.accepts ty do
             throw (diagnosticAt operand.span s!"operator {op.symbol} is not defined on {ty.name}")
       if leftValue.isConst && rightValue.isConst then
         let float := leftValue matches .float _ || rightValue matches .float _
-        unless irOp.accepts (if float then .float64 else .int) do
+        unless checkedOp.accepts (if float then .float64 else .int) do
           throw (diagnosticAt span s!"operator {op.symbol} is not defined on untyped float")
       let mismatch := diagnosticAt right.span
         s!"mismatched types {leftValue.typeName} and {rightValue.typeName}"
@@ -320,15 +203,15 @@ mutual
           unless ty.isNumeric do throw mismatch
           pure (← constTo constant ty left.span, right', ty)
         | a, b => return ← foldConst op a b right.span
-      if irOp == .divide || irOp == .remainder then
+      if checkedOp == .divide || checkedOp == .remainder then
         if right' matches .intLiteral 0 || right' matches .floatLiteral 0 then
           throw (diagnosticAt right.span "division by zero")
       let right' := if op == .bitClear then .binary .bitXor ty right' (allOnes ty) else right'
-      return .typed (.binary irOp ty left' right') (if irOp.isComparison then .bool else ty)
+      return .typed (.binary checkedOp ty left' right') (if checkedOp.isComparison then .bool else ty)
 
   private partial def checkShift (hint : Option Ty) (op : Syntax.BinaryOp)
       (left right : Syntax.Expr) (span : Span) : ExprM Value := do
-    let shift : IR.ShiftOp := if op == .shiftLeft then .left else .right
+    let shift : ShiftOp := if op == .shiftLeft then .left else .right
     let leftValue ← checkValue hint left
     let count ← checkValue none right
     let countValue? ← match count with
@@ -560,15 +443,14 @@ private partial def isTerminating (statements : Array Syntax.Stmt) : Bool :=
   | some (.forLoop _ none _ body) => !hasOwnBreak body
   | _ => false
 
-/-- Check the whole source, including unreachable statements, and resolve names to stable IDs.
-User diagnostics retain the public `lowering` phase. -/
+/-- Check the whole source, including unreachable statements, and resolve names to stable IDs. -/
 def check (file : Syntax.File) : Except Diagnostic Checked.File := do
   if file.packageName.text != "main" then throw (diagnosticAt file.packageName.span "expected package main")
   -- Collect every signature before checking bodies to allow forward calls and recursion.
   let all ← signatures file
-  let some main := all["main"]? | throw ⟨.lowering, none, "expected main function"⟩
+  let some main := all["main"]? | throw ⟨.check, none, "expected main function"⟩
   unless main.parameters.isEmpty && main.results.isEmpty do
-    throw ⟨.lowering, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
+    throw ⟨.check, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
       "main must have no parameters or return value"⟩
   let mut functions := #[]
   for function in file.functions do

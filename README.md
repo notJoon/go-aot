@@ -32,8 +32,8 @@ then lowers that tree to IR. IR verification runs before the LLVM backend.
 ## Backends
 
 The compiler emits target independent LLVM IR and asks Clang to optimize, generate host
-machine code, and link it. It invokes `clang -O2 -x ir`, and the generated IR contains no
-hard-coded target triple or data layout.
+machine code, and link it. It invokes `clang -O2 -x ir`, or the Clang that `CLANG` names, and
+the generated IR contains no hard-coded target triple or data layout.
 
 LLVM is the only backend. A C backend served as a second implementation to compare against
 while the language core was built, and was removed once the core was complete (#13). It shares

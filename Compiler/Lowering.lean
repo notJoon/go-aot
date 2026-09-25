@@ -1,6 +1,7 @@
 module
 
 public import Compiler.Checked
+public import Compiler.IR
 public import Compiler.Diagnostic
 import Compiler.Lowering.Builder
 

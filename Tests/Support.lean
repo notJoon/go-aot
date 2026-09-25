@@ -12,14 +12,13 @@ namespace GoAot.Tests
 def Phase.name : Phase → String
   | .lexer => "lexer"
   | .parser => "parser"
+  | .check => "check"
   | .lowering => "lowering"
   | .ir => "ir"
-  | .cBackend => "c"
-  | .llvmBackend => "llvm"
 
 /--
 One line for a result: `ok`, or a diagnostic's phase, position, the source text its span covers,
-and message. Example: `lowering 2:24 'x': unknown identifier 'x'`.
+and message. Example: `check 2:24 'x': unknown identifier 'x'`.
 -/
 def describe (source : Source) : Except Diagnostic α → String
   | .ok _ => "ok"

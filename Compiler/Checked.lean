@@ -1,6 +1,6 @@
 module
 
-public import Compiler.IR
+public import Compiler.Operator
 
 public section
 
@@ -17,8 +17,8 @@ inductive Expr where
   | boolLiteral (value : Bool)
   | local (id : LocalId)
   | call (function : FunctionId) (arguments : Array Expr)
-  | binary (op : IR.Op) (ty : Ty) (left right : Expr)
-  | shift (op : IR.ShiftOp) (ty : Ty) (value : Expr) (countTy : Ty) (count : Expr)
+  | binary (op : Op) (ty : Ty) (left right : Expr)
+  | shift (op : ShiftOp) (ty : Ty) (value : Expr) (countTy : Ty) (count : Expr)
   | convert (source target : Ty) (value : Expr)
   /-- Short circuit conjunction. `right` runs only when `left` is true. -/
   | and (left right : Expr)
@@ -45,7 +45,7 @@ inductive Stmt where
 
 structure Function where
   name : String
-  parameters : Array IR.Parameter
+  parameters : Array Parameter
   /-- Slot types indexed by `LocalId`, including parameters and declarations in dead source. -/
   locals : Array Ty
   results : Array Ty

@@ -22,8 +22,8 @@ compile: parser 1:9 '123': expected identifier
 parse: parser 2:5 '': expected identifier
 check: parser 2:5 '': expected identifier
 compile: parser 2:5 '': expected identifier
-check: lowering: expected main function
-compile: lowering: expected main function
+check: check: expected main function
+compile: check: expected main function
 -/
 #guard_msgs in
 #eval show IO Unit from do
@@ -41,11 +41,11 @@ compile: lowering: expected main function
 info: parser 2:17 '+=': compound assignments are unsupported
 parser 2:16 '++': increment and decrement statements are unsupported
 parser 2:28 ',': multiple variable declarations and assignments are unsupported
-lowering 2:15 'println()': println expects one argument
-lowering 2:27 '1 < 2': initializer must be int
-lowering 2:15 'break': break outside loop
-lowering 2:39 'missing': unknown identifier 'missing'
-lowering 2:1 'func f() int { for { return 1; break } }': function 'f' must end with return
+check 2:15 'println()': println expects one argument
+check 2:27 '1 < 2': initializer must be int
+check 2:15 'break': break outside loop
+check 2:39 'missing': unknown identifier 'missing'
+check 2:1 'func f() int { for { return 1; break } }': function 'f' must end with return
 -/
 #guard_msgs in
 #eval show IO Unit from do

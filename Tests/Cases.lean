@@ -1,5 +1,5 @@
 import GoAot
-import Compiler.Parser.Go
+import Compiler.Parser
 import Compiler.IR.Verify
 import Compiler.Backend.LLVM
 import Tests.Harness
@@ -89,26 +89,18 @@ def ExpectedError.parse (text : String) : Except String ExpectedError := do
   | #[] => throw "an errorcheck case needs one // ERROR comment"
   | _ => throw "the compiler reports only its first error, so a case has one // ERROR comment"
 
--- The Lean toolchain Clang on macOS cannot locate the host SDK during linking.
-def clangCommand : IO String :=
-  return (← IO.getEnv "CLANG").getD (if System.Platform.isOSX then "/usr/bin/clang" else "clang")
-
 -- Verify input SSA and every transformed module before code generation.
 def llvmOptions : Array String := #["-Wno-override-module", "-Xclang", "-llvm-verify-each"]
 
 /-- IR that relies on poison or undefined behavior often works at only one of these levels. -/
 def optimizationLevels : List String := ["-O0", "-O2"]
 
-def clang (arguments : Array String) : IO Unit := do
-  let result ← IO.Process.output { cmd := ← clangCommand, args := arguments }
-  unless result.exitCode == 0 do throw (IO.userError result.stderr)
-
 def runLLVM (generated : String) (level : String) : IO IO.Process.Output :=
   IO.FS.withTempDir fun dir => do
     let sourcePath := dir / "program.ll"
     let exePath := dir / "program"
     IO.FS.writeFile sourcePath generated
-    clang (#[level] ++ llvmOptions ++ #["-x", "ir", sourcePath.toString, "-o", exePath.toString])
+    Toolchain.clang (#[level] ++ llvmOptions ++ #["-x", "ir", sourcePath.toString, "-o", exePath.toString])
     IO.Process.output { cmd := exePath.toString }
 
 def optimizeLLVM (generated : String) : IO String :=
@@ -116,7 +108,7 @@ def optimizeLLVM (generated : String) : IO String :=
     let sourcePath := dir / "program.ll"
     let optimizedPath := dir / "optimized.ll"
     IO.FS.writeFile sourcePath generated
-    clang (#["-O2"] ++ llvmOptions ++ #["-S", "-emit-llvm", "-x", "ir", sourcePath.toString,
+    Toolchain.clang (#["-O2"] ++ llvmOptions ++ #["-S", "-emit-llvm", "-x", "ir", sourcePath.toString,
       "-o", optimizedPath.toString])
     IO.FS.readFile optimizedPath
 
@@ -291,7 +283,7 @@ def llvmCases : Array Case := #[
     IO.FS.withTempDir fun dir => do
       let objectPath := dir / "invalid.o"
       let result ← IO.Process.output {
-        cmd := ← clangCommand
+        cmd := ← Toolchain.clangCommand
         args := #["-O2"] ++ llvmOptions ++ #["-x", "ir", "-c", "Tests/Fixtures/invalid_ssa.ll",
           "-o", objectPath.toString]
       }
