@@ -84,11 +84,7 @@ def toFloat (value : Rat) : Float := Id.run do
   let magnitude := if exponent > 971 then 1 / 0 else (Float.ofNat quotient).scaleB exponent
   return if value.num < 0 then -magnitude else magnitude
 
-#guard [("0.1", 0.1), ("0.3", 0.3), ("1e-5", 1e-5), ("123456789.0", 123456789.0),
-    ("1.7976931348623157e308", 1.7976931348623157e308), ("5e-324", 5e-324), ("2.5e-324", 5e-324),
-    ("2.4e-324", 0), ("2.2250738585072011e-308", 2.2250738585072011e-308),
-    ("9007199254740993", 9007199254740992), ("9007199254740995", 9007199254740996)].all
-  fun (text, expected) => (decodeFloat? text.toSlice).map toFloat == some expected
+-- `Tests/Cases/run/float_literal_rounding.go` checks rounding against gc.
 #guard toFloat (1 / 10 + 2 / 10) == 0.3 && toFloat (-3 / 2) == -1.5
 #guard (toFloat (OfScientific.ofScientific 18 false 307)).isInf
 
