@@ -15,11 +15,7 @@ private def compileFile (input output : String) (emit : Bool) : IO Unit := do
   IO.FS.withTempFile fun handle path => do
     handle.putStr generated
     handle.flush
-    -- The Lean toolchain Clang on macOS cannot locate the host SDK during linking.
-    discard <| IO.Process.run {
-      cmd := if System.Platform.isOSX then "/usr/bin/clang" else "clang"
-      args := #["-O2", "-Wno-override-module", "-x", "ir", path.toString, "-o", output]
-    }
+    Toolchain.clang #["-O2", "-Wno-override-module", "-x", "ir", path.toString, "-o", output]
 
 private def usage : IO.Error :=
   IO.userError "usage: goaot <input.go> [-o output]"
