@@ -60,11 +60,6 @@ private def literalAllocations (count : Nat) : IO (Nat × Nat) := do
   let lowering ← loweringAllocations checked
   return (checking, lowering)
 
-@[noinline] private def nameAllocations (name : String) : IO Nat := do
-  IO.setNumHeartbeats 0
-  unless IR.validName name do throw (IO.userError "name probe rejected a valid name")
-  IO.getNumHeartbeats
-
 def performanceMain : IO Unit := do
   let small := 10
   let large := 10000
@@ -81,10 +76,6 @@ def performanceMain : IO Unit := do
   for count in [1000, 3000] do
     let .ok file := parse (functionSource count) | throw (IO.userError "function probe failed to parse")
     measureFunctions file
-  let short ← nameAllocations (String.ofList (List.replicate small 'a'))
-  let long ← nameAllocations (String.ofList (List.replicate large 'a'))
-  IO.println s!"Name allocations: {short} -> {long}"
-  unless long <= short do throw (IO.userError "name validation allocates per character")
   let (checkShort, short) ← literalAllocations small
   let (checkLong, long) ← literalAllocations large
   IO.println s!"Check + lower literal allocations: {checkShort + short} -> {checkLong + long} (check {checkShort} -> {checkLong}, lower {short} -> {long})"

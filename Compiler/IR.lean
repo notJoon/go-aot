@@ -116,13 +116,4 @@ structure Function where
 structure Program where
   functions : Array Function
 
-private def asciiLetter (c : Char) : Bool :=
-  ('a' ≤ c && c ≤ 'z') || ('A' ≤ c && c ≤ 'Z')
-
-private def asciiDigit (c : Char) : Bool := '0' ≤ c && c ≤ '9'
-
-def validName (name : String) : Bool :=
-  !name.isEmpty && (asciiLetter name.front || name.front == '_') &&
-    name.all fun c => asciiLetter c || asciiDigit c || c == '_'
-
 end GoAot.IR

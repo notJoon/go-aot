@@ -64,8 +64,6 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
   let mut functions : Std.HashMap String Function := {}
   for function in program.functions do
     let checked : Except String Unit := do
-      unless validName function.name do
-        throw s!"unsupported function name '{function.name}'"
       if functions.contains function.name then
         throw s!"duplicate function '{function.name}'"
       if function.name == "main" then
@@ -74,8 +72,6 @@ private def verifyFunctions (program : Program) : Except VerifyError (Std.HashMa
       let mut parameters : Std.HashSet String := {}
       for parameter in function.parameters do
         let parameter := parameter.name
-        unless validName parameter do
-          throw s!"unsupported parameter name '{parameter}'"
         if parameters.contains parameter then
           throw s!"duplicate parameter '{parameter}'"
         parameters := parameters.insert parameter
