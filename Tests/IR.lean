@@ -47,7 +47,7 @@ info: "fib" @go_fib
 
 #guard match (parse (Source.ofString
     "package main\nfunc f() int { return 1 }\nfunc f() int { return 2 }\nfunc main() {}\n")).bind Check.check with
-  | .error error => error == ⟨.lowering, some ⟨44, 45⟩, "duplicate function 'f'"⟩
+  | .error error => error == ⟨.check, some ⟨44, 45⟩, "duplicate function 'f'"⟩
   | .ok _ => false
 
 -- Existing phase interfaces reject mixed inputs without result wrappers.
@@ -388,7 +388,7 @@ function 'f', block 0, instruction 0: slot 7 is not declared earlier in the entr
   let some (Syntax.Stmt.varDeclaration name _ _) := function.body[0]? | return false
   let file := { file with functions := #[{ function with body := #[.varDeclaration name none none] }] }
   return match Check.check file with
-    | .error error => error == ⟨.lowering, some name.span, "variable declaration requires a type or initializer"⟩
+    | .error error => error == ⟨.check, some name.span, "variable declaration requires a type or initializer"⟩
     | .ok _ => false
 
 private def pending (terminator : Option IR.Terminator) : Lowering.PendingBlock :=

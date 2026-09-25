@@ -55,7 +55,7 @@ def Scope.declare (scope : Scope) (name : String) (symbol : Symbol) :
   if scope.current.contains name then
     let message := if symbol.kind == .parameter then s!"duplicate parameter '{name}'"
       else s!"duplicate declaration '{name}'"
-    throw ⟨.lowering, some symbol.span, message⟩
+    throw ⟨.check, some symbol.span, message⟩
   return { scope with current := scope.current.insert name symbol }
 
 end GoAot

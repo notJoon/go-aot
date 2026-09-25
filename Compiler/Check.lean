@@ -11,7 +11,7 @@ public section
 namespace GoAot.Check
 
 private def diagnosticAt (span : Span) (message : String) : Diagnostic :=
-  ⟨.lowering, some span, message⟩
+  ⟨.check, some span, message⟩
 
 private structure Signature where
   id : Checked.FunctionId
@@ -560,15 +560,14 @@ private partial def isTerminating (statements : Array Syntax.Stmt) : Bool :=
   | some (.forLoop _ none _ body) => !hasOwnBreak body
   | _ => false
 
-/-- Check the whole source, including unreachable statements, and resolve names to stable IDs.
-User diagnostics retain the public `lowering` phase. -/
+/-- Check the whole source, including unreachable statements, and resolve names to stable IDs. -/
 def check (file : Syntax.File) : Except Diagnostic Checked.File := do
   if file.packageName.text != "main" then throw (diagnosticAt file.packageName.span "expected package main")
   -- Collect every signature before checking bodies to allow forward calls and recursion.
   let all ← signatures file
-  let some main := all["main"]? | throw ⟨.lowering, none, "expected main function"⟩
+  let some main := all["main"]? | throw ⟨.check, none, "expected main function"⟩
   unless main.parameters.isEmpty && main.results.isEmpty do
-    throw ⟨.lowering, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
+    throw ⟨.check, (file.functions.find? (·.name.text == "main".toSlice)).map (·.span),
       "main must have no parameters or return value"⟩
   let mut functions := #[]
   for function in file.functions do
