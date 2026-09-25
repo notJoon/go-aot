@@ -170,12 +170,18 @@ arrays would also change it, because they build long `insertvalue` chains.
 | String literal bytes | `@.str.<n>`, private |
 | Other runtime constants | `@.<name>`, private, for example `@.int_format` |
 
-A Go identifier cannot contain `.`, so runtime names never collide with `go_` names. For now,
-functions and parameters are limited to ASCII letters, digits, and `_` by `IR.validName`.
+A Go identifier cannot contain `.`, so runtime names never collide with `go_` names.
 
-Issue #15 decides mangling. With only an LLVM backend, it can use quoted LLVM names, which may
-contain any bytes. The direction is `@"go.<package>.<name>"` for functions and
-`@"go.<package>.<Type>.<method>"` for methods, which leaves room for package qualification.
+A symbol that is not plain ASCII letters, digits, and `_` is quoted, and every byte outside
+printable ASCII, along with `"` and `\`, is written as `\` and two hex digits. Any Go identifier
+therefore reaches LLVM as its UTF-8 bytes. For example, `func 계산` is
+`@"go_\EA\B3\84\EC\82\B0"`. Distinct names cannot share a symbol, because the prefix and the
+escaping are both reversible and only `main` lacks the prefix. `Backend.Symbol.function` implements
+this. Parameters and locals never reach LLVM by name.
+
+Would change if: packages arrive. Package paths can contain `_`, so `go_<package>_<name>` could
+collide. Symbols would move to `@"go.<package>.<name>"` for functions and
+`@"go.<package>.<Type>.<method>"` for methods, where `.` cannot appear in an identifier.
 
 ## Where the backend differs from this document
 

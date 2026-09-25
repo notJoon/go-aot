@@ -25,30 +25,25 @@ private def sourceView (source : String) (text : String.Slice) (span : Span)
       (fun (name, expected) => sourceView source name.text name.span expected) &&
     sourceView source text span "1_000" && text.toNat? == some 1000
 
--- The backend emits names as they are, so only ASCII identifiers are valid (#15).
+-- Any identifier reaches LLVM, quoted when it is not plain ASCII (#15).
 /--
-info: "a" valid
-"Z" valid
-"_" valid
-"a0" valid
-"_09" valid
-"Ab_c123" valid
-"" invalid
-"0" invalid
-"9abc" invalid
-"a-b" invalid
-"a b" invalid
-"a\n" invalid
-"가" invalid
-"a가" invalid
-"a١" invalid
-"a\x00" invalid
+info: "fib" @go_fib
+"main" @main
+"go_main" @go_go_main
+"_" @go__
+"계산" @"go_\EA\B3\84\EC\82\B0"
+"a١" @"go_a\D9\A1"
+"a\"b" @"go_a\22b"
+"a\\22b" @"go_a\5C22b"
+"a-b" @"go_a-b"
+"" @go_
 -/
 #guard_msgs in
 #eval show IO Unit from do
-  for name in ["a", "Z", "_", "a0", "_09", "Ab_c123",
-      "", "0", "9abc", "a-b", "a b", "a\n", "가", "a가", "a١", "a\x00"] do
-    IO.println s!"{repr name} {if IR.validName name then "valid" else "invalid"}"
+  let names := ["fib", "main", "go_main", "_", "계산", "a١", "a\"b", "a\\22b", "a-b", ""]
+  for name in names do IO.println s!"{repr name} {Backend.Symbol.function name}"
+  unless (names.map Backend.Symbol.function).eraseDups.length == names.length do
+    IO.println "two names share a symbol"
 
 #guard match (parse (Source.ofString
     "package main\nfunc f() int { return 1 }\nfunc f() int { return 2 }\nfunc main() {}\n")).bind Check.check with
@@ -96,9 +91,6 @@ private def definition : IR.Instruction := .binary 0 .add .int intValue intValue
 -- Function names, parameters, and the program's function set.
 /--
 info: ok
-function 'bad-name': unsupported function name 'bad-name'
-function '': unsupported function name ''
-function 'f': unsupported parameter name 'bad-name'
 function 'f': duplicate parameter 'x'
 function 'f', block 0, terminator: return must have 0 operands
 function 'f': function must have an entry block
@@ -111,9 +103,7 @@ function 'main': main must have no parameters or return value
 -/
 #guard_msgs in
 #eval report ([⟨#[mainFunction, intFunction]⟩] ++
-  [{ intFunction with name := "bad-name" }, { intFunction with name := "" },
-    { intFunction with parameters := #[⟨"bad-name", .int⟩] },
-    { intFunction with parameters := #[⟨"x", .int⟩, ⟨"x", .int⟩] },
+  [{ intFunction with parameters := #[⟨"x", .int⟩, ⟨"x", .int⟩] },
     { intFunction with results := #[] }, { intFunction with blocks := #[] },
     { intFunction with blocks := #[⟨#[], .ret #[]⟩] }].map (⟨#[mainFunction, ·]⟩) ++
   [⟨#[]⟩, ⟨#[intFunction]⟩, ⟨#[mainFunction, intFunction, intFunction]⟩,

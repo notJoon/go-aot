@@ -73,17 +73,6 @@ private def collectRuntimeNeeds (program : IR.Program) : Needs := Id.run do
         | _ => pure ()
   return needs
 
-private def emitBytes (output : String) (bytes : ByteArray) : String := Id.run do
-  let mut output := output
-  for byte in bytes do
-    let value := byte.toNat
-    if 32 <= value && value <= 126 && value != 34 && value != 92 then
-      output := output.push (Char.ofNat value)
-    else
-      output := (output.push '\\').push (value / 16).digitChar.toUpper
-      output := output.push (value % 16).digitChar.toUpper
-  return output
-
 private def hexDigits (value count : Nat) : String :=
   String.ofList ((List.range count).reverse.map fun index => (value / 16 ^ index % 16).digitChar.toUpper)
 
@@ -236,7 +225,7 @@ private def emitInstructions (functions : Std.HashMap String IR.Function)
       output := output ++ "  " ++ (match results with
         | #[] => ""
         | #[id] => s!"%v{id} = "
-        | _ => holder ++ " = ") ++ "call " ++ type ++ " @" ++ Symbol.function name
+        | _ => holder ++ " = ") ++ "call " ++ type ++ " " ++ Symbol.function name
       output := emitArguments output callee arguments
       if results.size ≥ 2 then
         for h : index in [:results.size] do
@@ -279,7 +268,7 @@ private def emitFunction (functions : Std.HashMap String IR.Function)
     (stringIndices : Std.HashMap ByteArray Nat) (output : String)
     (function : IR.Function) : String := Id.run do
   let linkage := if Symbol.isEntry function then "" else "internal "
-  let mut output := output ++ "define " ++ linkage ++ resultType function ++ " @" ++ Symbol.function function.name ++ "("
+  let mut output := output ++ "define " ++ linkage ++ resultType function ++ " " ++ Symbol.function function.name ++ "("
   for h : index in [:function.parameters.size] do
     if index != 0 then output := output ++ ", "
     output := output ++ llvmType function.parameters[index].ty ++ " %arg" ++ toString index
@@ -389,7 +378,7 @@ private def printFloatHelper : String := lines [
   "  ret void", "}"]
 
 private def stringGlobal (output name : String) (bytes : ByteArray) : String :=
-  emitBytes (output ++ name ++ " = private unnamed_addr constant [" ++ toString (bytes.size + 1) ++
+  Symbol.escape (output ++ name ++ " = private unnamed_addr constant [" ++ toString (bytes.size + 1) ++
     " x i8] c\"") bytes ++ "\\00\"\n"
 
 def emit (program : IR.Program) : String := Id.run do

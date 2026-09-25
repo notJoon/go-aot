@@ -32,7 +32,6 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap Str
   for h : i in [:file.functions.size] do
     let function := file.functions[i]
     let name := function.name.text.copy
-    unless IR.validName name do throw (diagnosticAt function.name.span s!"unsupported function name '{name}'")
     if result.contains name then
       throw (diagnosticAt function.name.span s!"duplicate function '{name}'")
     let mut parameters := #[]
@@ -40,8 +39,6 @@ private def signatures (file : Syntax.File) : Except Diagnostic (Std.HashMap Str
     for parameter in function.parameters do
       let ty ← resolveType parameter.typeName
       let parameterName := parameter.name.text.copy
-      unless IR.validName parameterName do
-        throw (diagnosticAt parameter.name.span s!"unsupported parameter name '{parameter.name.text}'")
       scope ← scope.declare parameterName
         ⟨.parameter, parameters.size, ty, parameter.name.span⟩
       parameters := parameters.push ⟨parameterName, ty⟩
@@ -384,7 +381,7 @@ private def checkDeclaration (name : Syntax.Ident) (typeName : Option Syntax.Ide
   if typeName.isNone && initializer.isNone then
     throw (diagnosticAt name.span "variable declaration requires a type or initializer")
   let nameText := name.text.copy
-  unless IR.validName nameText && nameText != "_" do
+  if nameText == "_" then
     throw (diagnosticAt name.span s!"unsupported local name '{nameText}'")
   let declared ← typeName.mapM fun typeName => (monadLift (resolveType typeName) : CheckM Ty)
   -- The initializer cannot see the binding being declared.
@@ -438,7 +435,6 @@ private def checkMultiAssignment (names : Array Syntax.Ident) (define : Bool) (v
       targets := targets.push (some symbol.id)
     | none =>
       unless define do throw (diagnosticAt target.span s!"unknown identifier '{text}'")
-      unless IR.validName text do throw (diagnosticAt target.span s!"unsupported local name '{text}'")
       let id := (← get).size
       scope ← scope.declare text ⟨.local, id, ty, target.span⟩
       modify (·.push ty)
