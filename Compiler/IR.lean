@@ -43,7 +43,7 @@ inductive Instruction where
   A negative signed count panics. -/
   | shift (result : ValueId) (op : ShiftOp) (ty : Ty) (value : Operand) (countTy : Ty) (count : Operand)
   /-- Converts between numeric types. Integers truncate or extend by the source signedness. Floats
-  convert to integers toward zero, saturating at the range of `target.floatConversionTy` with NaN
+  convert to integers toward zero, saturating at the range of `floatConversionTy target` with NaN
   as 0, then truncate to `target`. -/
   | convert (result : ValueId) (source target : Ty) (value : Operand)
   /-- Calls `name`, defining one value per callee result. -/
@@ -51,6 +51,14 @@ inductive Instruction where
   -- Source escapes are decoded during checking, so the backend receives the final bytes.
   | printString (bytes : ByteArray)
   | print (ty : Ty) (value : Operand)
+
+/--
+The type a float converts through before truncating to `target`. Go leaves out-of-range float to
+integer conversions to the implementation. Like gc on arm64, an integer narrower than 32 bits
+saturates at 32 bits, so `uint8(300.0)` is 44 (#60).
+-/
+def floatConversionTy (target : Ty) : Ty :=
+  if target.bits ≥ 32 then target else if target.isSigned then .int32 else .uint32
 
 inductive Terminator where
   | br (target : BlockId)

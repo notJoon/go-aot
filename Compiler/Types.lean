@@ -37,9 +37,6 @@ def size : Ty → Nat
   | .int32 | .uint32 => 4
   | .int | .int64 | .uint | .uint64 | .float64 => 8
 
-/-- Scalars are aligned to their size. -/
-def align (ty : Ty) : Nat := ty.size
-
 def bits (ty : Ty) : Nat := ty.size * 8
 
 def isInteger (ty : Ty) : Bool := ty.kind == .signed || ty.kind == .unsigned
@@ -66,13 +63,6 @@ def maxValue : Ty → Int
 /-- Whether an integer type can represent `value`. -/
 def contains (ty : Ty) (value : Int) : Bool :=
   ty.isInteger && ty.minValue ≤ value && value ≤ ty.maxValue
-
-/--
-The type a float converts through before truncating to `ty`. Like gc, a float converts to an
-integer narrower than 32 bits by saturating at 32 bits, so `uint8(300.0)` is 44.
--/
-def floatConversionTy (ty : Ty) : Ty :=
-  if ty.bits ≥ 32 then ty else if ty.isSigned then .int32 else .uint32
 
 def name : Ty → String
   | .bool => "bool"

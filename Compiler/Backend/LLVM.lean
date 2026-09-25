@@ -66,7 +66,7 @@ private def collectRuntimeNeeds (program : IR.Program) : Needs := Id.run do
         | .shift _ _ _ _ countTy _ => if countTy.isSigned then needs := { needs with shift := true }
         | .convert _ source target _ =>
           if source.kind == .float && target.isInteger then
-            let wide := target.floatConversionTy
+            let wide := IR.floatConversionTy target
             let name := s!"llvm.fpto{if wide.isSigned then "s" else "u"}i.sat.{llvmType wide}.f64"
             unless needs.intrinsics.any (·.1 == name) do
               needs := { needs with intrinsics := needs.intrinsics.push (name, wide) }
@@ -170,7 +170,7 @@ private def emitConvert (output : String) (id : IR.ValueId) (source target : Ty)
   let targetType := llvmType target
   match source.kind, target.kind with
   | .float, .signed | .float, .unsigned =>
-    let wide := target.floatConversionTy
+    let wide := IR.floatConversionTy target
     let wideType := llvmType wide
     let name := "%v" ++ toString id
     let call := "call " ++ wideType ++ " @llvm.fpto" ++ (if wide.isSigned then "s" else "u") ++ "i.sat." ++
